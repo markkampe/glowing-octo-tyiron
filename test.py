@@ -1,13 +1,6 @@
 #!/usr/bin/python
 #
-# Ceph - scalable distributed file system
-#
-# Copyright (C) Inktank
-#
-# This is free software; you can redistribute it and/or
-# modify it under the terms of the GNU Lesser General Public
-# License version 2.1, as published by the Free Software
-# Foundation.  See file COPYING.
+# nonesuch
 #
 
 """
@@ -20,14 +13,14 @@ dictionaries, describing the devices, cluster, and tests to be run
 # simulations
 import SimDisk
 import SimFS
-import FileStore
-import Rados
+import Server
+import Cluster
 
 # test harnesses
 import disktest
 import fstest
-import filestoretest
-import radostest
+import servertest
+import clustertest
 
 from units import *
 
@@ -76,53 +69,29 @@ def makefs(disk, dict):
         return SimFS.btrfs(disk, age)
     elif 'fs' in dict and dict['fs'] == 'ext4':
         return SimFS.ext4(disk, age)
+    elif 'fs' in dict and dict['fs'] == 'zfs':
+        return SimFS.zfs(disk, age)
+    elif 'fs' in dict and dict['fs'] == 'xfs':
+        return SimFS.xfs(disk, age)
     else:
         return SimFS.xfs(disk, age)
 
 
-def makerados(filestore, dict):
-    """ instantiate the rados cluster described by a configuration dict
-        filestore -- on which cluster is based
+def makecluster(server, dict):
+    """ instantiate the cluster described by a configuration dict
+        blockserver -- on which cluster is based
         dict -- of cluster configuration parameters
              -- nodes: number of nodes in cluster
-             -- osd_per_node: number of OSDs per node
+             -- disk_per_node: number of OSDs per node
              -- front: speed of front-side network
              -- back: speed of back-side network
     """
 
-    return Rados.Rados(filestore,
+    return Cluster.Cluster(server,
             front_nic=dict['front'],
             back_nic=dict['back'],
             nodes=dict['nodes'],
-            osd_per_node=dict['osd_per_node'])
-
-
-def sample(name, fs, sz):
-    """ collect performance sample data for simulated file system
-        name -- name of the sample
-        fs -- file system to be sampled
-        sz -- fio file size to be simulated
-    """
-    sizes = {
-        '4k': 4086,
-        '128k': 128 * 1024,
-        '4m': 4 * 1024 * 1024
-    }
-
-    print("%sData = {" % (name))
-    print("    'source': 'sampled %s on %s'," % (fs.desc, fs.disk.desc))
-    for d in (1, 32):
-        for b in ("4k", "128k", "4m"):
-            bs = sizes[b]
-            tsr = fs.read(bs, sz, seq=True, depth=d, direct=True)
-            print("    'seq-read-%s-d%d': %d," % (b, d, MEG * bs / tsr))
-            tsw = fs.write(bs, sz, seq=True, depth=d, direct=True)
-            print("    'seq-write-%s-d%d': %d," % (b, d, MEG * bs / tsw))
-            trr = fs.read(bs, sz, seq=False, depth=d, direct=True)
-            print("    'rand-read-%s-d%d': %d," % (b, d, MEG * bs / trr))
-            trw = fs.write(bs, sz, seq=False, depth=d, direct=True)
-            print("    'rand-write-%s-d%d': %d," % (b, d, MEG * bs / trw))
-    print("    }")
+            disk_per_node=dict['disk_per_node'])
 
 
 def test(data, journal, cluster, tests):
@@ -138,127 +107,73 @@ def test(data, journal, cluster, tests):
     myData = makefs(myDDisk, data)
     data_fstype = myData.desc
     data_dev = myDDisk.desc
-    data_desc = "data FS (%s on %s)" % (data_fstype, data_dev)
+    data_desc = "%s (on %s)" % (data_fstype, data_dev)
 
-    # instantiate the journal device description
-    j_share = 1
-    if journal != None:
-        myJDisk = makedisk(journal)
-        myJrnl = makefs(myJDisk, journal)
-        jrnl_fstype = myJrnl.desc
-        jrnl_dev = myJDisk.desc
-        jrnl_desc = "journal FS (%s on %s)" % (jrnl_fstype, jrnl_dev)
-        if 'shared' in journal and journal['shared']:
-            j_share = cluster['osd_per_node']
-    else:
-        myJrnl = None
-        jrnl_desc = "journal on data disk"
+    # instantiate a server node
+    myServer = Server.Server(myData, cluster['disk_per_node'])
 
-    # instantiate the filestore
-    journal_share = 1 if not j_share else cluster['osd_per_node']
-    myFstore = FileStore.FileStore(myData, myJrnl, journal_share=j_share)
-
-    # instantiate the RADOS simulation
-    myRados = makerados(myFstore, cluster)
+    # instantiate the distributed system
+    myClust = makecluster(myServer, cluster)
 
     #
     # run the specified tests for the specified ranges
     #
 
     if 'DiskParms' in tests and tests['DiskParms']:
-        if myJrnl is not None:
-            print("Journal Device Characteristics")
-            disktest.disktest(myJrnl.disk)
-            print("")
         print("Data Device Characteristics")
         disktest.disktest(myData.disk)
         print("")
 
-    # fio to the raw journal device
+    # fio to the raw disk
     if 'FioRsize' in tests and 'FioRdepths' in tests:
         sz = tests['FioRsize']
-        if 'FioJournal' in tests and tests['FioJournal']:
-            for d in tests['FioRdepths']:
-                print("Raw journal device (%s), depth=%d" % (jrnl_dev, d))
-                disktest.tptest(myJrnl.disk, filesize=sz, depth=d)
-                print("")
-
-        # fio to the raw disk
         for d in tests['FioRdepths']:
             print("Raw data device (%s), depth=%d" % (data_dev, d))
             disktest.tptest(myData.disk, filesize=sz, depth=d)
             print("")
 
+    # fio to the data file system
     sz = tests['FioFsize']
     if 'FioFdepths' in tests:
-        # fio to the journal file system
-        if 'FioJournal' in tests and tests['FioJournal']:
-            for d in tests['FioFdepths']:
-                print("FIO (direct) to %s, depth=%d" % (jrnl_desc, d))
-                fstest.fstest(myJrnl, filesize=sz, depth=d, direct=True)
-                print("")
-
-        # fio to the data file system
         for d in tests['FioFdepths']:
             print("FIO (direct) to %s, depth=%d" % (data_desc, d))
-            fstest.fstest(myFstore.data_fs, filesize=sz, depth=d, direct=True)
+            fstest.fstest(myServer.data_fs, filesize=sz, depth=d, direct=True)
             print("")
 
-    # and capture sampled performance just in case anyone cares
-    if 'perfdata' in tests:
-        print("#")
-        print("# Sampled file system throughput to be fed into DataFS.py to")
-        print("# enable filestore simulation based on actual FS performance")
-        print("#")
-        print("")
-        sample("Data", myData, sz)
-        if myJrnl is not None:
-            print("")
-            sample("Jrnl", myJrnl, sz)
-
-    # filestore tests with the configured journal
-    if 'SioFsize' in tests and 'SioFnobj' in tests:
-        msg = "smalliobench-fs, %s, %s%s, depth=%d"
-        sz = tests['SioFsize']
-        no = tests['SioFnobj']
-        for d in tests['SioFdepths']:
-            print(msg % (data_desc, jrnl_desc,
-                        "" if j_share == 1 else "/%d" % (j_share), d))
-            print("\tnobj=%d, objsize=%d" % (no, sz))
-            filestoretest.fstoretest(myFstore, nobj=no, obj_size=sz, depth=d)
+    # FIX - lose SioSnobj
+    # server throughput tests
+    if 'SioSsize' in tests and 'SioSnobj' in tests:
+        msg = "server-throughput: %d x %s, network=%dGb/s, depth=%d"
+        sz = tests['SioSsize']      # FIX keep/change?
+        no = tests['SioSnobj']      # FIX obsolete
+        for d in tests['SioSdepths']:
+            print(msg %
+                  (myServer.num_disks, data_desc, gig(8*myServer.nic_bw), d))
+            servertest.servertest(myServer, nobj=no, obj_size=sz, depth=d)
             print("")
 
-        # and run them again with journal on disk
-        if myJrnl is not None:
-            noj = FileStore.FileStore(myData, None)
-            for d in tests['SioFdepths']:
-                print(msg % (data_desc, "journal on data disk", "", d))
-                print("\tnobj=%d, objsize=%d" % (no, sz))
-                filestoretest.fstoretest(noj, nobj=no, obj_size=sz, depth=d)
-                print("")
-
-        msg = "smalliobench-rados (%dx%d), %d copy, "
+        msg = "cluster-throughput (%dx%d), %d copy, "
         msg += "clients*instances*depth=(%d*%d*%d)"
-        sz = tests['SioRsize']
-        no = tests['SioRnobj']
-        for x in tests['SioRcopies']:
-            for c in tests['SioRclients']:
-                for i in tests['SioRinstances']:
-                    for d in tests['SioRdepths']:
+        sz = tests['SioCsize']
+        no = tests['SioCnobj']
+        for x in tests['SioCcopies']:
+            for c in tests['SioCclients']:
+                for i in tests['SioCinstances']:
+                    for d in tests['SioCdepths']:
                         print(msg %
-                            (myRados.num_nodes, myRados.osd_per_node,
+                            (myClust.num_nodes, myClust.disk_per_node,
                             x, c, i, d))
                         print("\t%s, %s%s, nobj=%d, objsize=%d" %
                                 (data_desc, jrnl_desc,
                                 "" if j_share == 1 else "/%d" % (j_share),
                                 no, sz))
-                        radostest.radostest(myRados, obj_size=sz, nobj=no,
+                        clustertest.clustertest(myClust, obj_size=sz, nobj=no,
                                             clients=c, depth=i * d, copies=x)
                         print("")
 
     # check for warnings
-    if myFstore.warnings != "" or myRados.warnings != "":
-        print("WARNINGS: %s%s" % (myFstore.warnings, myRados.warnings))
+    if myServer.warnings != "" or myClust.warnings != "":
+        print("WARNINGS: %s%s" % (myServer.warnings, myClust.warnings))
 
 
 #
@@ -268,7 +183,7 @@ if __name__ == '__main__':
 
     data = {        # data storage devices
         'device': "disk",
-        'fs': "xfs"
+        'fs': "zfs"
     }
 
     journal = {     # journal devices
@@ -285,7 +200,7 @@ if __name__ == '__main__':
         'front': 1 * GIG,
         'back': 10 * GIG,
         'nodes': 4,
-        'osd_per_node': 4
+        'disk_per_node': 4
     }
 
     tests = {       # what tests to run with what parameters
@@ -294,23 +209,23 @@ if __name__ == '__main__':
         'FioRdepths': [1, 32],
         'FioRsize': 16 * GIG,
 
-        # FIO performance tests
+        # FS performance tests
         'FioJournal': True,
         'FioFdepths': [1, 32],
         'FioFsize': 16 * GIG,
 
-        # filestore performance tests
-        'SioFdepths': [16],
-        'SioFsize': 1 * GIG,
-        'SioFnobj': 2500,
+        # Server performance tests
+        'SioSdepths': [16],
+        'SioSsize': 1 * GIG,
+        'SioSnobj': 2500,
 
-        # RADOS performance tests
-        'SioRdepths': [16],
-        'SioRsize': 1 * GIG,
-        'SioRnobj': 2500 * 4 * 4,   # multiply by number of OSDs
-        'SioRcopies': [2],
-        'SioRclients': [3],
-        'SioRinstances': [4]
+        # Cluster performance tests
+        'SioCdepths': [16],
+        'SioCsize': 1 * GIG,
+        'SioCnobj': 2500 * 4 * 4,   # multiply by number of OSDs
+        'SioCcopies': [2],
+        'SioCclients': [3],
+        'SioCinstances': [4]
     }
 
     notests = {     # just generate simulation data
