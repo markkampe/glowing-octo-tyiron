@@ -113,7 +113,8 @@ class FS:
     flush_max = 128             # max parallelism for cache flush writes
     md_seek = 0                 # average cylinders from data to metadata
 
-    # number of metadata writes associated with create/delete
+    # number of metadata reads/writes associated with I-node operations
+    md_open = 1.0               # one I-node read
     md_create = 3.0             # parent directory, directory inode, new inode
     md_delete = 2.0             # parent directory, deleted inode
 
@@ -185,8 +186,9 @@ class FS:
             time *= shards
         else:
             time += (shards - 1) * \
-                self.disk.avgRead(bsize, file_size, seq=self.seq_shard,
-                    depth=d)
+                self.disk.avgRead(bsize,
+                                  file_size, seq=self.seq_shard,
+                                  depth=d)
 
         # add in the time for the meta-data lookups
         # FIX: shards multiplier should get the seq read bonus
@@ -204,7 +206,7 @@ class FS:
     # data disks
     #
     def write(self, bsize, file_size, seq=True, depth=1,
-                direct=False, sync=False):
+              direct=False, sync=False):
         """ average time for writes to a single file
             bsize -- read unit (bytes)
             file_size -- size of file being read from (bytes)
@@ -237,8 +239,9 @@ class FS:
         if seq or shards == 1:
             time *= shards
         else:
-            time += (shards - 1) * self.disk.avgWrite(bsize, file_size, \
-                seq=self.seq_shard, depth=d)
+            time += (shards - 1) * self.disk.avgWrite(bsize, file_size,
+                                                      seq=self.seq_shard,
+                                                      depth=d)
 
         # figure out how many metadata writes we'll have to do
         mdw = shards * interpolate(self.md_write, bsize)
@@ -254,6 +257,11 @@ class FS:
         time += t
 
         return time
+
+    def open(self):
+        """ open a file whose parent directory is already in cache """
+        t = self.disk.avgRead(self.md_size, self.md_seek)
+        return self.md_open * t
 
     def create(self, sync=False):
         """ new file creation """
@@ -372,3 +380,27 @@ class ext4(FS):
         self.md_write = {4096: .11, 4096 * 1024: 0.30}
         self.seq_read = {4096: 0.0001, 4096 * 1024: 0.001}
         self.seq_write = {4096: 0.0001, 4096 * 1024: 0.001}
+
+
+class zfs(FS):
+    """ ZFS simulation """
+
+    def __init__(self, disk, age=0):
+        """ Instantiate a XFS simulation. """
+
+        FS.__init__(self, disk, md_span=0.5)
+        self.desc = "XFS"
+        if age > 0:
+            self.desc += "(%3.1f)" % age
+
+        # need ZFS calibration values !!!
+        self.max_shard = 4096 * 1024
+        self.seq_shard = False
+        self.flush_max = 16
+        self.md_read = {4096: 0.08, 4096 * 1024: 1.05}
+        self.md_write = {4096: 0.05, 4096 * 1024: 1.30}
+        self.seq_read = {4096: 0.012, 4096 * 1024: 0.40}
+        self.seq_write = {4096: 0.095, 4096 * 1024: 0.60}
+        self.max_dir_r = {4096: 32, 4096 * 1024: 1}
+        self.max_dir_w = {4096: 1, 4096 * 1024: 1}
+
