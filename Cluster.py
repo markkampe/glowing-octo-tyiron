@@ -1,17 +1,11 @@
 #
-# Ceph - scalable distributed file system
-#
-# Copyright (C) Inktank
-#
-# This is free software; you can redistribute it and/or
-# modify it under the terms of the GNU Lesser General Public
-# License version 2.1, as published by the Free Software
-# Foundation.  See file COPYING.
+# nonesuch
 #
 
 """
 This is intended to be able to simulate the overhead that
-a remote RADOS client experiences for standard test loads
+a distributed FS client experiences when doing parallel
+N+M RAID multiple file servers.
 
 NOTE:
 
@@ -29,11 +23,10 @@ NOTE:
    were even more confusing.
 """
 
-# useful unit multipliers
-GIG = 1000000000
+from units import GIG, SECOND
 
 
-class Rados:
+class Cluster:
     """ Performance Modeling RADOS Simulation. """
 
     nic_overhead = 0.00		# fraction of NIC we can't use
@@ -42,19 +35,19 @@ class Rados:
 
     def __init__(self, filestore,
             front_nic=10 * GIG, back_nic=10 * GIG,
-            nodes=1, osd_per_node=1):
+            nodes=1, disk_per_node=1):
         """ create a RADOS simulation
             filestore -- simulation
             front_nic -- front side NIC speed
             back_nic -- back side NIC speed
             nodes -- number of nodes in the cluster
-            osd_per_node -- number of OSDs per node
+            disk_per_node -- number of data disks per node
         """
 
         self.filestore = filestore
         self.num_nodes = nodes
-        self.num_osds = nodes * osd_per_node
-        self.osd_per_node = osd_per_node
+        self.num_osds = nodes * disk_per_node
+        self.disk_per_node = disk_per_node
         self.frontside = (1 - self.nic_overhead) * front_nic / 8
         self.backside = (1 - self.nic_overhead) * back_nic / 8
 
@@ -63,7 +56,6 @@ class Rados:
             bsize -- size of the message to be sent
             bw -- NIC bandwidth for this operation
         """
-        SECOND = 1000000
         return SECOND * bsize / bw
 
     def read(self, bsize, obj_size, nobj=2500, depth=1, clients=1):
@@ -88,7 +80,7 @@ class Rados:
 
         # at what rate can (shared) server NIC return responses
         stime = self.network(bsize,
-            self.frontside * self.num_nodes / self.osd_per_node)
+            self.frontside * self.num_nodes / self.disk_per_node)
 
         # at what rate can (a single) client NIC accept responses
         ctime = self.network(bsize, self.frontside * clients)
@@ -134,8 +126,8 @@ class Rados:
         ftime *= copies         # but they are also making copies
 
         # at what rate can (shared) primary server accept/replicate
-        fsbw = self.frontside * self.num_nodes / self.osd_per_node
-        bsbw = self.backside * self.num_nodes / self.osd_per_node
+        fsbw = self.frontside * self.num_nodes / self.disk_per_node
+        bsbw = self.backside * self.num_nodes / self.disk_per_node
         stime = self.network(bsize, fsbw)
         stime += (copies - 1) * self.network(bsize, bsbw)
 
