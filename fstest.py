@@ -1,17 +1,16 @@
 #!/usr/bin/python
 #
-# Ceph - scalable distributed file system
+# NO COPYRIGHT/COPYLEFT
 #
-# Copyright (C) Inktank
-#
-# This is free software; you can redistribute it and/or
-# modify it under the terms of the GNU Lesser General Public
-# License version 2.1, as published by the Free Software
-# Foundation.  See file COPYING.
+#   This module merely invokes a simulation and displays
+#   the results using standard reporting functions.  As it
+#   merely uses those API's it is an "application" under the
+#   Gnu Lesser General Public Licence.  It can be reproduced,
+#   modified, and distributed without restriction.
 #
 
 from units import *
-from report import Report
+from Report import Report
 
 
 """

@@ -17,7 +17,7 @@ disk simulation exerciser
 """
 
 from units import *
-from report import Report
+from Report import Report
 import SimDisk
 
 
@@ -44,7 +44,7 @@ def tptest(disk, filesize, depth):
 
         r.printBW(bs, (bsr, bsw, brr, brw))
         r.printIOPS(bs, (bsr, bsw, brr, brw))
-        #r.printLatency(bs, (tsr, tsw, trr, trw))
+        r.printLatency(bs, (tsr, tsw, trr, trw))
 
 
 def disktest(disk):

@@ -6,7 +6,7 @@
 exerciser for a single server
 """
 
-from report import Report
+from Report import Report
 from units import *
 
 

@@ -11,7 +11,7 @@
 #
 
 """
-nicely formatted out put for multi-column bandwidth, iops and latency reports
+nicely formatted output for multi-column bandwidth, iops and latency reports
 """
 
 from units import *
@@ -75,11 +75,11 @@ class Report:
 
         for bw in vector:
             if bw >= 100 * MB:
-                tp += ("%7d MB/s" % (bw / MEG),)
-            elif bw <= 10 * MB:
-                tp += ("%7.2f MB/s" % (float(bw) / MEG),)
+                tp += ("%7d MB/s" % ((bw + 500000) / MEG),)
+            elif bw < 10 * MB:
+                tp += ("%7.2f MB/s" % (float(bw + 5000) / MEG),)
             else:
-                tp += ("%7.1f MB/s" % (float(bw) / MEG),)
+                tp += ("%7.1f MB/s" % (float(bw + 50000) / MEG),)
         print(self.h_fmt % tp)
 
     def printIOPS(self, bs, vector):
