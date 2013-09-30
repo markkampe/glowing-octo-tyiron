@@ -1,6 +1,7 @@
 #
 # nonesuch
 #
+#   FIX this simulation does not include HBA throughput limitations
 
 """
 This is intended to be able to simulate the overhead of
@@ -8,14 +9,7 @@ a block server that stores the data in local memory and
 periodically flushes the accumulated writes to disk.
 """
 
-
-import Poisson
 from  units import *
-
-
-def xfer(bytes, rate):
-    """ time to transfer a specified number of bytes """
-    return SECOND * bytes / rate
 
 
 class Server:
@@ -25,28 +19,32 @@ class Server:
 
     def __init__(self,
                  data_fs,
+                 nic,
+                 cpu,
                  num_disks=1,
-                 nic_bw=10 * GIG,
+                 num_nics=1,
+                 num_cpus=1,
                  writeback=32 * MB,
                  objsize=4 * MB):
         """ create a file store simulation
             data_fs -- SimFS for the data file system
+            nic -- SimIFC for the network interface
+            cpu -- SimCPU for the processor
             num_disks -- number of data file systems per server
-            nic_bw -- available network bandwidth
+            num_nic -- number of NICs per server
+            num_cpus -- number of processors per server
             writeback -- size of writeback buffer
             objsize -- maximum size of an on-disk object
         """
         self.data_fs = data_fs
-        self.write_buf = writeback
+        self.nic = nic
+        self.cpu = cpu
         self.num_disks = num_disks
-        self.nic_bw = nic_bw / 8
+        self.num_nics = num_nics
+        self.num_cpus = num_cpus
+        self.write_buf = writeback
         self.obj_size = objsize
-
-        # bad performance estimates ... FIX calculate or make parameters
-        self.min_nic_write = 1  # us to send a minimum response
-        self.min_nic_read = 1   # us to receive/dispatch a server thread
-        self.dispatch = 20      # us to wake and dispatch a thread
-        self.copy_bw = 768 * MB  # speed for data writes to NVRAM
+        self.min_msg = 128
 
     def read(self, bsize, depth=1, seq=False):
         """ expected read performance
@@ -55,11 +53,17 @@ class Server:
             seq -- is this sequential I/O (subsequent reads from cache)
         """
 
-        # basic times for message receipt, dispatch and response
-        t_net = self.min_nic_read + xfer(bsize, self.nic_bw) \
-            + self.min_nic_write
-        t_dsp = self.dispatch
-        bw_n = self.nic_bw
+        # network times for request receipt and response transmission
+        t_net = self.nic.min_read_latency + self.nic.read_time(self.min_msg)
+        t_net += self.nic.min_write_latency + self.nic.write_time(bsize)
+        bw_n = self.num_nics * self.nic.max_read_bw
+
+        # CPU time to process the received packet and response
+        t_dsp = self.nic.read_cpu(bsize)
+        t_rsp = self.nic.write_cpu(self.min_msg)
+        t_cpu = self.cpu.process(bsize)
+        bw_cpu = bsize * SECOND / (t_dsp + t_rsp + t_cpu)
+        bw_cpu *= self.num_cpus * self.cpu.cores * self.cpu.hyperthread
 
         # expected parallelism (requsts to multiple FS/disks)
         parallel = depth if depth <= self.num_disks else self.num_disks
@@ -72,7 +76,7 @@ class Server:
         t_l_dsk = self.data_fs.open()
 
         # the actual file I/O
-        if seq and bsize <= obj_size /2:
+        if seq and bsize <= obj_size / 2:
             # FIX ... should we get whole-object read benefits here
             t_fr = self.data_fs.read(bsize, self.data_fs.size,
                                      seq=False, depth=perdisk)
@@ -87,14 +91,15 @@ class Server:
         t_dsk = t_l_dsk + t_fr
         bw_fs = SECOND * bsize * self.num_disks / t_dsk
 
-        # FIX ... could CPU cycles be the binding constraint
-        bw_cpu = self.copy_bw
-
         # compute the request latency and throughputs
-        latency = t_net + t_dsp + t_l_cpu + t_l_dsk + t_fr
+        latency = t_net + t_dsp + t_l_cpu + t_l_dsk + t_fr + t_cpu + t_rsp
         iops = SECOND / latency
         bw_iops = bsize * iops
         bandwidth = min(bw_iops, bw_n, bw_fs, bw_cpu)
+        if (bandwidth == bw_n) and "NIC caps" not in self.warnings:
+            msg = "\n\tServer NIC caps throughput for %d byte reads"
+            self.warnings += msg % (bsize)
+
         return (latency, bandwidth)
 
     def write(self, bsize, depth=1, seq=False):
@@ -105,13 +110,14 @@ class Server:
         """
 
         # basic times for message receipt, dispatch and response
-        t_net = self.min_nic_read + xfer(bsize, self.nic_bw) + \
-            self.min_nic_write
-        t_dsp = self.dispatch
-        bw_n = self.nic_bw
+        t_net = self.nic.min_read_latency + self.nic.read_time(bsize)
+        t_net += self.nic.min_write_latency + self.nic.write_time(self.min_msg)
+        bw_n = self.num_nics * self.nic.max_read_bw
 
-        # making a local copy
-        t_copy = xfer(bsize, self.copy_bw)
+        # CPU time to process the received packet, copy it, and send response
+        t_dsp = self.nic.read_cpu(self.min_msg)
+        t_rsp = self.nic.write_cpu(bsize)
+        t_cpu = self.cpu.mem_read(bsize) + self.cpu.mem_write(bsize)
 
         # figure out how much parallelism we can get out of this load
         parallel = 1 if bsize >= self.write_buf else self.write_buf / bsize
@@ -141,17 +147,22 @@ class Server:
                                       seq=False, sync=False, depth=perdisk)
         t_disk = t_l_dsk + t_fw
         bw_fs = SECOND * bsize * self.num_disks / t_disk
+        # FIX ... do I have to add some CPU costs for the write as well
 
         # compute the overall CPU load
-        t_sync = t_dsp + t_copy
+        t_sync = t_dsp + t_rsp + t_cpu
         t_async = t_l_cpu
         bw_cpu = SECOND * bsize / (t_sync + t_async)
+        bw_cpu *= self.num_cpus * self.cpu.cores * self.cpu.hyperthread
 
         # compute the request latency and throughputs
         latency = t_net + t_sync
         iops = SECOND / latency
         bw_iops = bsize * iops
         bandwidth = min(bw_iops, bw_n, bw_fs, bw_cpu)
+        if (bandwidth == bw_n) and "NIC caps" not in self.warnings:
+            msg = "\n\tServer NIC caps throughput for %d byte writes"
+            self.warnings += msg % (bsize)
         return (latency, bandwidth)
 
     def create(self):
