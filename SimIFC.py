@@ -38,10 +38,8 @@ class IFC:
         else:
             self.cpu = processor
 
-        self.min_read_cpu = processor.intr_us + processor.dma_us + \
-            processor.disp_us
-        self.min_write_cpu = processor.intr_us + processor.dma_us + \
-            processor.disp_us
+        self.min_read_cpu = processor.dma_us + processor.thread_us
+        self.min_write_cpu = processor.dma_us + processor.thread_us
 
         self.cpu_per_mb_read = 0    # CPU cost to read one MiB (us)
         self.cpu_per_mb_write = 0   # CPU cost to write one MiB (us)
