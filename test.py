@@ -13,8 +13,11 @@ dictionaries, describing the devices, cluster, and tests to be run
 # simulations
 import SimDisk
 import SimFS
+import SimIFC
+import SimCPU
 import Server
 import Cluster
+import zfs
 
 # test harnesses
 import disktest
@@ -70,7 +73,7 @@ def makefs(disk, dict):
     elif 'fs' in dict and dict['fs'] == 'ext4':
         return SimFS.ext4(disk, age)
     elif 'fs' in dict and dict['fs'] == 'zfs':
-        return SimFS.zfs(disk, age)
+        return zfs.zfs(disk, age)
     elif 'fs' in dict and dict['fs'] == 'xfs':
         return SimFS.xfs(disk, age)
     else:
@@ -110,7 +113,10 @@ def test(data, journal, cluster, tests):
     data_desc = "%s (on %s)" % (data_fstype, data_dev)
 
     # instantiate a server node
-    myServer = Server.Server(myData, cluster['disk_per_node'])
+    myCPU = SimCPU.CPU("Xeon", speed=3.3 * GIG)
+    myNIC = SimIFC.NIC("NIC", processor=myCPU)
+    myServer = Server.Server(myData, num_disks=cluster['disk_per_node'],
+                             cpu=myCPU, nic=myNIC)
 
     # instantiate the distributed system
     myClust = makecluster(myServer, cluster)
@@ -142,14 +148,15 @@ def test(data, journal, cluster, tests):
 
     # FIX - lose SioSnobj
     # server throughput tests
-    if 'SioSsize' in tests and 'SioSnobj' in tests:
-        msg = "server-throughput: %d x %s, network=%dGb/s, depth=%d"
+    if 'SioSsize' in tests:
+        msg = "server-throughput: %dx%s, %dx%s, %dx%s, depth=%d"
         sz = tests['SioSsize']      # FIX keep/change?
-        no = tests['SioSnobj']      # FIX obsolete
         for d in tests['SioSdepths']:
-            print(msg %
-                  (myServer.num_disks, data_desc, gig(8*myServer.nic_bw), d))
-            servertest.servertest(myServer, nobj=no, obj_size=sz, depth=d)
+            print(msg % (
+                  myServer.num_cpus, myServer.cpu.desc,
+                  myServer.num_disks, data_desc,
+                  myServer.num_nics, myServer.nic.desc, d))
+            servertest.servertest(myServer, obj_size=sz, depth=d)
             print("")
 
         msg = "cluster-throughput (%dx%d), %d copy, "
@@ -217,7 +224,6 @@ if __name__ == '__main__':
         # Server performance tests
         'SioSdepths': [16],
         'SioSsize': 1 * GIG,
-        'SioSnobj': 2500,
 
         # Cluster performance tests
         'SioCdepths': [16],
