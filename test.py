@@ -16,14 +16,14 @@ import SimFS
 import SimIFC
 import SimCPU
 import Server
-import Cluster
+import Gateway
 import zfs
 
 # test harnesses
 import disktest
 import fstest
 import servertest
-import clustertest
+import gatewaytest
 
 from units import *
 
@@ -57,7 +57,6 @@ def makedisk(dict):
         heads = dict['heads'] if 'heads' in dict else 10
         return SimDisk.Disk(rpm, sz, spd, heads=heads)
 
-
 def makefs(disk, dict):
     """ instantiate the filesystem described by a configuration dict
         disk -- on which file system is to be created
@@ -79,25 +78,7 @@ def makefs(disk, dict):
     else:
         return SimFS.xfs(disk, age)
 
-
-def makecluster(server, dict):
-    """ instantiate the cluster described by a configuration dict
-        blockserver -- on which cluster is based
-        dict -- of cluster configuration parameters
-             -- nodes: number of nodes in cluster
-             -- disk_per_node: number of OSDs per node
-             -- front: speed of front-side network
-             -- back: speed of back-side network
-    """
-
-    return Cluster.Cluster(server,
-            front_nic=dict['front'],
-            back_nic=dict['back'],
-            nodes=dict['nodes'],
-            disk_per_node=dict['disk_per_node'])
-
-
-def test(data, journal, cluster, tests):
+def test(data, server, gateway, tests):
     """ run a specific set of tests on a specific cluster simulation
         data -- dictionary describing the data devices
         journal -- dictionary describing the journal devices
@@ -113,13 +94,37 @@ def test(data, journal, cluster, tests):
     data_desc = "%s (on %s)" % (data_fstype, data_dev)
 
     # instantiate a server node
-    myCPU = SimCPU.CPU("Xeon", speed=3.3 * GIG)
-    myNIC = SimIFC.NIC("NIC", processor=myCPU)
-    myServer = Server.Server(myData, num_disks=cluster['disk_per_node'],
-                             cpu=myCPU, nic=myNIC)
+    myScpu = SimCPU.CPU(server['cpu'],
+                        speed=server['speed'],
+                        cores=server['cores'])
+    mySnic = SimIFC.NIC("eth",
+                        processor=myScpu,
+                        bw=server['nic'])
+    myShba = SimIFC.HBA("HBA",
+                        processor=myScpu,
+                        bw=8 * 8 * GIG)
+    myServer = Server.Server(myData, num_disks=server['disks'],
+                             cpu=myScpu, num_cpus=server['cpus'],
+                             nic=mySnic, num_nics=server['nics'],
+                             hba=myShba, num_hbas=server['hbas'])
+
 
     # instantiate the distributed system
-    myClust = makecluster(myServer, cluster)
+    myGcpu = SimCPU.CPU(gateway['cpu'],
+                        speed=gateway['speed'],
+                        cores=gateway['cores'])
+    myGfront = SimIFC.NIC("eth",
+                        processor=myGcpu,
+                        bw=gateway['front'])
+    myGback = SimIFC.NIC("eth",
+                        processor=myGcpu,
+                        bw=gateway['back'])
+    myGate = Gateway.Gateway(myServer, num_servers=gateway['servers'],
+                             cpu=myScpu, num_cpus=gateway['cpus'],
+                             front_nic=myGfront, num_front=gateway['fronts'],
+                             back_nic=myGback, num_back=gateway['backs'],
+                             n=gateway['n'], m=gateway['m'],
+                             stripe=gateway['stripe'])
 
     #
     # run the specified tests for the specified ranges
@@ -146,41 +151,33 @@ def test(data, journal, cluster, tests):
             fstest.fstest(myServer.data_fs, filesize=sz, depth=d, direct=True)
             print("")
 
-    # FIX - lose SioSnobj
     # server throughput tests
-    if 'SioSsize' in tests:
-        msg = "server-throughput: %dx%s, %dx%s, %dx%s, depth=%d"
-        sz = tests['SioSsize']      # FIX keep/change?
+    if 'SioSdepths' in tests:
+        msg = "server-throughput: %dx%s, %dx%s, %dx%s, %dx%s, depth=%d"
         for d in tests['SioSdepths']:
             print(msg % (
                   myServer.num_cpus, myServer.cpu.desc,
                   myServer.num_disks, data_desc,
-                  myServer.num_nics, myServer.nic.desc, d))
-            servertest.servertest(myServer, obj_size=sz, depth=d)
+                  myServer.num_nics, myServer.nic.desc,
+                  myServer.num_hbas, myServer.hba.desc,
+                  d))
+            servertest.servertest(myServer, depth=d)
             print("")
 
-        msg = "cluster-throughput (%dx%d), %d copy, "
-        msg += "clients*instances*depth=(%d*%d*%d)"
-        sz = tests['SioCsize']
-        no = tests['SioCnobj']
-        for x in tests['SioCcopies']:
-            for c in tests['SioCclients']:
-                for i in tests['SioCinstances']:
-                    for d in tests['SioCdepths']:
-                        print(msg %
-                            (myClust.num_nodes, myClust.disk_per_node,
-                            x, c, i, d))
-                        print("\t%s, %s%s, nobj=%d, objsize=%d" %
-                                (data_desc, jrnl_desc,
-                                "" if j_share == 1 else "/%d" % (j_share),
-                                no, sz))
-                        clustertest.clustertest(myClust, obj_size=sz, nobj=no,
-                                            clients=c, depth=i * d, copies=x)
-                        print("")
+    if 'SioCdepths' in tests:
+        msg = "gateway throughput: %dx%s, front=%dx%s, back=%dx%s, depth=%d"
+        for d in tests['SioCdepths']:
+            print(msg % (
+                  myGate.num_cpus, myGate.cpu.desc,
+                  myGate.num_fronts, myGate.front.desc,
+                  myGate.num_backs, myGate.back.desc,
+                  d))
+            gatewaytest.gatewaytest(myGate, depth=d)
+            print("")
 
     # check for warnings
-    if myServer.warnings != "" or myClust.warnings != "":
-        print("WARNINGS: %s%s" % (myServer.warnings, myClust.warnings))
+    if myServer.warnings != "" or myGate.warnings != "":
+        print("WARNINGS: %s%s" % (myServer.warnings, myGate.warnings))
 
 
 #
@@ -193,21 +190,31 @@ if __name__ == '__main__':
         'fs': "zfs"
     }
 
-    journal = {     # journal devices
-        'device': "ssd",
-        'size': 1 * GIG,
-        'speed': 400 * MEG,
-        'iops': 30000,
-        'streams': 8,
-        'fs': "xfs",
-        'shared': True
+    gateway = {     # gateway
+        'cpu': "xeon",
+        'speed': 2.2 * GIG,
+        'cores': 2,
+        'cpus': 1,
+        'front': 10 * GIG,
+        'fronts': 1,
+        'back': 10 * GIG,
+        'backs': 1,
+        'n': 5,
+        'm': 2,
+        'stripe': 128 * KB,
+        'servers': 4,
     }
 
-    cluster = {     # cluster configuration
-        'front': 1 * GIG,
-        'back': 10 * GIG,
-        'nodes': 4,
-        'disk_per_node': 4
+    server = {      # file server
+        'cpu': "xeon",
+        'speed': 2.5 * GIG,
+        'cores': 2,
+        'cpus': 1,
+        'nic': 10 * GIG,
+        'nics': 1,
+        'hba': 8 * GIG,
+        'hbas': 1,
+        'disks': 4,
     }
 
     tests = {       # what tests to run with what parameters
@@ -222,16 +229,10 @@ if __name__ == '__main__':
         'FioFsize': 16 * GIG,
 
         # Server performance tests
-        'SioSdepths': [16],
-        'SioSsize': 1 * GIG,
+        'SioSdepths': [1,16],
 
-        # Cluster performance tests
-        'SioCdepths': [16],
-        'SioCsize': 1 * GIG,
-        'SioCnobj': 2500 * 4 * 4,   # multiply by number of OSDs
-        'SioCcopies': [2],
-        'SioCclients': [3],
-        'SioCinstances': [4]
+        # Gateway performance tests
+        'SioCdepths': [1,16],
     }
 
     notests = {     # just generate simulation data
@@ -246,6 +247,6 @@ if __name__ == '__main__':
                 default=False, help="produce simulated FS performance data")
     (opts, files) = parser.parse_args()
     if opts.sim:
-        test(data, journal, cluster, notests)
+        test(data, server, gateway, notests)
     else:
-        test(data, journal, cluster, tests)
+        test(data, server, gateway, tests)
