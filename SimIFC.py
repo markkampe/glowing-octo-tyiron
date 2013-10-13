@@ -74,7 +74,7 @@ class IFC:
         return cpu
 
     def queue_length(self, rho, max_depth=1000):
-        """ expected average waiting time (us) for NIC writes
+        """ average queue depth as a function of load
             rho -- average fraction of time NIC is busy
             max_depth -- the longest the queue can possibly be
         """
