@@ -11,6 +11,8 @@ periodically flushes the accumulated writes to disk.
 
 from  units import *
 
+WARN_LEVEL = 0.8            # max expected load on pass-through resources
+
 
 class Server:
     """ Performance Modeling Single Server Simulation. """
@@ -56,11 +58,21 @@ class Server:
             seq -- is this sequential I/O (subsequent reads from cache)
         """
 
+        descr = "%dK, d=%d %s reads" % \
+            (bsize / 1024, depth, "seqential" if seq else "random")
+
+        # we start out with no queuing delays
+        t_queue = 0
+
         # network times for request receipt and response transmission
         t_net = self.nic.min_read_latency + self.nic.read_time(self.min_msg)
         t_net += self.nic.min_write_latency + \
             self.nic.write_time(self.min_msg + bsize)
         bw_n = self.num_nics * self.nic.max_read_bw
+        delay = 0  # FIX - compute NIC queueing delays
+        if (delay > 0):
+            self.warnings += "NIC load adds %dus to %s\n" % (delay, descr)
+            t_queue += delay
 
         # CPU time to process the received packet and response
         t_dsp = self.nic.read_cpu(self.min_msg)
@@ -68,6 +80,10 @@ class Server:
         t_cpu = self.cpu.process(bsize)
         bw_cpu = bsize * SECOND / (t_dsp + t_rsp + t_cpu)
         bw_cpu *= self.num_cpus * self.cpu.cores * self.cpu.hyperthread
+        delay = 0  # FIX - compute CPU queueing delays
+        if (delay > 0):
+            self.warnings += "CPU load adds %dus to %s\n" % (delay, descr)
+            t_queue += delay
 
         # expected parallelism (requsts to multiple FS/disks)
         parallel = depth if depth <= self.num_disks else self.num_disks
@@ -94,20 +110,33 @@ class Server:
                                      seq=False, depth=perdisk)
         t_dsk = t_l_dsk + t_fr
         bw_fs = SECOND * bsize * self.num_disks / t_dsk
+        bw_hba = self.num_hbas * self.hba.max_read_bw
+        delay = 0  # FIX - compute HBA queueing delays
+        if (delay > 0):
+            self.warnings += "HBA load adds %dus to %s\n" % (delay, descr)
+            t_queue += delay
 
         # compute the request latency and throughputs
         latency = t_net + t_dsp + t_l_cpu + t_l_dsk + t_fr + t_cpu + t_rsp
-        iops = SECOND / latency
-        bw_iops = bsize * iops
-        bandwidth = min(bw_iops, bw_n, bw_fs, bw_cpu)
+        latency += t_queue
+        iops = depth * SECOND / latency
+        bandwidth = min(bsize * iops, bw_n, bw_fs, bw_cpu, bw_hba)
         load = {
             'net': bandwidth / bw_n,
             'cpu': bandwidth / bw_cpu,
             'fs': bandwidth / bw_fs,
-            'hba': bandwidth / self.hba.max_read_bw
+            'hba': bandwidth / bw_hba
         }
 
-        # FIX - check for saturation and derate latency accordingly
+        # check for unexpected throughput caps
+        for key in ('net', 'cpu', 'hba'):
+            l = load[key]
+            if l > 0.99:
+                self.warnings += "throughput is capped by %s for %s\n" \
+                    % (key, descr)
+            elif l >= WARN_LEVEL:
+                self.warnings += "%s load at %4.2f for %s\n" % (key, l, descr)
+
         return (latency, bandwidth, load)
 
     def write(self, bsize, depth=1, seq=False):
@@ -117,16 +146,30 @@ class Server:
             seq -- is this sequential I/O (aggregate whole object writes)
         """
 
+        descr = "%dK, d=%d %s writes" % \
+            (bsize / 1024, depth, "seqential" if seq else "random")
+
+        # we start out with no queuing delays
+        t_queue = 0
+
         # basic times for message receipt, dispatch and response
         t_net = self.nic.min_read_latency + \
             self.nic.read_time(self.min_msg + bsize)
         t_net += self.nic.min_write_latency + self.nic.write_time(self.min_msg)
         bw_n = self.num_nics * self.nic.max_read_bw
+        delay = 0  # FIX - compute NIC queueing delays
+        if (delay > 0):
+            self.warnings += "NIC load adds %dus to %s\n" % (delay, descr)
+            t_queue += delay
 
         # CPU time to process the received packet, copy it, and send response
         t_dsp = self.nic.read_cpu(self.min_msg + bsize)
         t_rsp = self.nic.write_cpu(self.min_msg)
         t_cpu = self.cpu.mem_read(bsize) + self.cpu.mem_write(bsize)
+        delay = 0  # FIX - compute CPU queueing delays
+        if (delay > 0):
+            self.warnings += "CPU load adds %dus to %s\n" % (delay, descr)
+            t_queue += delay
 
         # figure out how much parallelism we can get out of this load
         parallel = 1 if bsize >= self.write_buf else self.write_buf / bsize
@@ -156,6 +199,11 @@ class Server:
                                       seq=False, sync=False, depth=perdisk)
         t_disk = t_l_dsk + t_fw
         bw_fs = SECOND * bsize * self.num_disks / t_disk
+        bw_hba = self.num_hbas * self.hba.max_write_bw
+        delay = 0  # FIX - compute HBA queueing delays
+        if (delay > 0):
+            self.warnings += "HBA load adds %dus to %s\n" % (delay, descr)
+            t_queue += delay
         # FIX ... do I have to add some CPU costs for the write as well
 
         # compute the overall CPU load
@@ -163,20 +211,28 @@ class Server:
         t_async = t_l_cpu
         bw_cpu = SECOND * bsize / (t_sync + t_async)
         bw_cpu *= self.num_cpus * self.cpu.cores * self.cpu.hyperthread
+        # FIX - add CPU queuing delays
 
         # compute the request latency and throughputs
-        latency = t_net + t_sync
-        iops = SECOND / latency
-        bw_iops = bsize * iops
-        bandwidth = min(bw_iops, bw_n, bw_fs, bw_cpu)
+        latency = t_net + t_sync + t_queue
+        iops = depth * SECOND / latency
+        bandwidth = min(bsize * iops, bw_n, bw_fs, bw_cpu, bw_hba)
         load = {
             'net': bandwidth / bw_n,
             'cpu': bandwidth / bw_cpu,
             'fs': bandwidth / bw_fs,
-            'hba': bandwidth / self.hba.max_write_bw
+            'hba': bandwidth / bw_hba
         }
 
-        # FIX - check for saturation and derate latency accordingly
+        # check for unexpected throughput caps
+        for key in ('net', 'cpu', 'hba'):
+            l = load[key]
+            if l > 0.99:
+                self.warnings += "throughput is capped by %s for %s\n" \
+                    % (key, descr)
+            elif l >= WARN_LEVEL:
+                self.warnings += "%s load at %4.2f for %s\n" % (key, l, descr)
+
         return (latency, bandwidth, load)
 
     def create(self):
