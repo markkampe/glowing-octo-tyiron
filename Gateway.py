@@ -10,6 +10,8 @@ servers.
 
 from units import KB, SECOND
 
+WARN_LEVEL = 0.8            # max expected load on pass-through resources
+
 
 class Gateway:
     """ Performance Modeling Gateway Server Simulation. """
@@ -64,6 +66,12 @@ class Gateway:
             seq -- is this sequential I/O (subsequent reads from cache)
         """
 
+        descr = "%dK, d=%d %s reads" % \
+            (bsize / 1024, depth, "seqential" if seq else "random")
+
+        # we start out with no queuing delays
+        t_queue = 0
+
         # network times for request receipt and response transmission
         Lfr = self.front.min_read_latency
         Lfw = self.front.min_write_latency
@@ -79,10 +87,10 @@ class Gateway:
         # cost of obtaining the necessary lock
         P_lock = 0              # FIX ... how often to dw need lock
         t_net += P_lock * (Lbw + self.back.write_time(req))
-        t_cpu += P_lock * (self.back.write_cpu(req))
-        t_lock = P_lock * 0     # FIX ... probably need a DLM model
         t_net += P_lock * (Lbw + self.back.read_time(req))
         t_cpu += P_lock * (self.back.read_cpu(req))
+        t_cpu += P_lock * (self.back.write_cpu(req))
+        t_lock = P_lock * 0     # FIX ... probably need a DLM model
 
         # cost of forwarding request to servers and awaiting response(s)
         sseq = False            # CLAIM: striping breaks sequential reads
@@ -106,6 +114,27 @@ class Gateway:
         t_net += Lfw + self.front.write_time(rsp)           # send response
         t_cpu += self.front.write_cpu(rsp)
 
+        delay = 0  # FIX - compute lock server queueing delays
+        if (delay > 0):
+            self.warnings += "DLM load adds %dus to %s\n" % \
+                (delay, descr)
+            t_queue += delay
+
+        delay = 0  # FIX - compute CPU queueing delays
+        if (delay > 0):
+            self.warnings += "Gateway CPU load adds %dus to %s\n" % \
+                (delay, descr)
+
+        delay = 0  # FIX - compute back-side queueing delays (to all servers)
+        if (delay > 0):
+            self.warnings += "Gateway back-NIC load adds %dus to %s\n" % \
+                (delay, descr)
+
+        delay = 0  # FIX - compute front-side queueing delays
+        if (delay > 0):
+            self.warnings += "Gateway front-NIC load adds %dus to %s\n" % \
+                (delay, descr)
+
         # compute the effective network and CPU bandwidth
         bw_nf = self.num_fronts * self.front.max_write_bw
         bw_nb = self.num_backs * self.back.max_read_bw
@@ -113,10 +142,9 @@ class Gateway:
         bw_svr *= self.num_servers    # FIX this ignores long write stripe wrap
 
         # compute the request latency and throughputs
-        latency = t_net + t_cpu + t_lock + t_svr
-        iops = SECOND / latency
-        bw_iops = bsize * iops
-        bandwidth = min(bw_iops, bw_nf, bw_nb, bw_cpu)
+        latency = t_net + t_cpu + t_lock + t_svr + t_queue
+        iops = depth * SECOND / latency
+        bandwidth = min(bsize * iops, bw_nf, bw_nb, bw_cpu)
         load = {
             'front': bandwidth / bw_nf,
             'back': bandwidth / bw_nb,
@@ -125,7 +153,17 @@ class Gateway:
             'dlm': 0,                   # FIX - get from DLM model
         }
 
-        # FIX - check for saturation and derate latency accordingly
+        # check for unexpected throughput caps
+        for key in ('front', 'back', 'cpu', 'dlm'):
+            l = load[key]
+            if l > 0.99:
+                self.warnings += \
+                    "Gateway throughput is capped by %s for %s\n" \
+                    % (key, descr)
+            elif l >= WARN_LEVEL:
+                self.warnings += "Gateway %s load at %4.2f for %s\n" % \
+                    (key, l, descr)
+
         return (latency, bandwidth, load)
 
     def write(self, bsize, depth=1, seq=False):
@@ -134,6 +172,12 @@ class Gateway:
             depth -- number of parallel requests (multiple objects)
             seq -- is this sequential I/O (subsequent writest to same objs)
         """
+
+        descr = "%dK, d=%d %s writes" % \
+            (bsize / 1024, depth, "seqential" if seq else "random")
+
+        # we start out with no queuing delays
+        t_queue = 0
 
         # network times for request receipt and response transmission
         Lfr = self.front.min_read_latency
@@ -208,10 +252,9 @@ class Gateway:
         bw_svr *= self.num_servers    # FIX this ignores long write stripe wrap
 
         # compute the request latency and throughputs
-        latency = t_net + t_cpu + t_lock + t_svr
-        iops = SECOND / latency
-        bw_iops = bsize * iops
-        bandwidth = min(bw_iops, bw_nf, bw_nb, bw_cpu)
+        latency = t_net + t_cpu + t_lock + t_svr + t_queue
+        iops = depth * SECOND / latency
+        bandwidth = min(bsize * iops, bw_nf, bw_nb, bw_cpu)
         load = {
             'front': bandwidth / bw_nf,
             'back': bandwidth / bw_nb,
@@ -220,7 +263,17 @@ class Gateway:
             'dlm': 0,                   # FIX - get from DLM model
         }
 
-        # FIX - check for saturation and derate latency accordingly
+        # check for unexpected throughput caps
+        for key in ('front', 'back', 'cpu', 'dlm'):
+            l = load[key]
+            if l > 0.99:
+                self.warnings += \
+                    "Gateway throughput is capped by %s for %s\n" % \
+                    (key, descr)
+            elif l >= WARN_LEVEL:
+                self.warnings += "Gateway %s load at %4.2f for %s\n" % \
+                    (key, l, descr)
+
         return (latency, bandwidth, load)
 
     def create(self):
