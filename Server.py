@@ -71,7 +71,8 @@ class Server:
         bw_n = self.num_nics * self.nic.max_read_bw
         delay = 0  # FIX - compute NIC queueing delays
         if (delay > 0):
-            self.warnings += "NIC load adds %dus to %s\n" % (delay, descr)
+            self.warnings += "Server NIC load adds %dus to %s\n" % \
+                (delay, descr)
             t_queue += delay
 
         # CPU time to process the received packet and response
@@ -82,7 +83,8 @@ class Server:
         bw_cpu *= self.num_cpus * self.cpu.cores * self.cpu.hyperthread
         delay = 0  # FIX - compute CPU queueing delays
         if (delay > 0):
-            self.warnings += "CPU load adds %dus to %s\n" % (delay, descr)
+            self.warnings += "Server CPU load adds %dus to %s\n" % \
+                (delay, descr)
             t_queue += delay
 
         # expected parallelism (requsts to multiple FS/disks)
@@ -113,7 +115,8 @@ class Server:
         bw_hba = self.num_hbas * self.hba.max_read_bw
         delay = 0  # FIX - compute HBA queueing delays
         if (delay > 0):
-            self.warnings += "HBA load adds %dus to %s\n" % (delay, descr)
+            self.warnings += "Server HBA load adds %dus to %s\n" % \
+                (delay, descr)
             t_queue += delay
 
         # compute the request latency and throughputs
@@ -132,10 +135,11 @@ class Server:
         for key in ('net', 'cpu', 'hba'):
             l = load[key]
             if l > 0.99:
-                self.warnings += "throughput is capped by %s for %s\n" \
+                self.warnings += "Server throughput is capped by %s for %s\n" \
                     % (key, descr)
             elif l >= WARN_LEVEL:
-                self.warnings += "%s load at %4.2f for %s\n" % (key, l, descr)
+                self.warnings += "Server %s load at %4.2f for %s\n" % \
+                    (key, l, descr)
 
         return (latency, bandwidth, load)
 
@@ -159,7 +163,8 @@ class Server:
         bw_n = self.num_nics * self.nic.max_read_bw
         delay = 0  # FIX - compute NIC queueing delays
         if (delay > 0):
-            self.warnings += "NIC load adds %dus to %s\n" % (delay, descr)
+            self.warnings += "Server NIC load adds %dus to %s\n" % \
+                (delay, descr)
             t_queue += delay
 
         # CPU time to process the received packet, copy it, and send response
@@ -168,7 +173,8 @@ class Server:
         t_cpu = self.cpu.mem_read(bsize) + self.cpu.mem_write(bsize)
         delay = 0  # FIX - compute CPU queueing delays
         if (delay > 0):
-            self.warnings += "CPU load adds %dus to %s\n" % (delay, descr)
+            self.warnings += "Server CPU load adds %dus to %s\n" % \
+                (delay, descr)
             t_queue += delay
 
         # figure out how much parallelism we can get out of this load
@@ -202,7 +208,8 @@ class Server:
         bw_hba = self.num_hbas * self.hba.max_write_bw
         delay = 0  # FIX - compute HBA queueing delays
         if (delay > 0):
-            self.warnings += "HBA load adds %dus to %s\n" % (delay, descr)
+            self.warnings += "Server HBA load adds %dus to %s\n" % \
+                (delay, descr)
             t_queue += delay
         # FIX ... do I have to add some CPU costs for the write as well
 
@@ -228,10 +235,11 @@ class Server:
         for key in ('net', 'cpu', 'hba'):
             l = load[key]
             if l > 0.99:
-                self.warnings += "throughput is capped by %s for %s\n" \
+                self.warnings += "Server throughput is capped by %s for %s\n" \
                     % (key, descr)
             elif l >= WARN_LEVEL:
-                self.warnings += "%s load at %4.2f for %s\n" % (key, l, descr)
+                self.warnings += "Server %s load at %4.2f for %s\n" % \
+                    (key, l, descr)
 
         return (latency, bandwidth, load)
 
