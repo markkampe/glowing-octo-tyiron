@@ -10,8 +10,10 @@ servers.
 
 from units import KB, SECOND
 
+# constants to control queue length warnings
 WARN_LOAD = 0.8             # warn if load goes above this level
-WARN_DELAY = 100            # (us) warn if queue delay goes above
+WARN_DELAY = 100            # (us) only warn if queue delay goes above
+WARN_DELTA = 10             # (%) only warn if queue delay increases op time by
 
 
 class Gateway:
@@ -106,13 +108,18 @@ class Gateway:
             (t_svr, bw_svr, l_svr) = self.server.read(bsize, depth, sseq)
             t_cpu += self.back.write_cpu(req)
             t_cpu += self.back.read_cpu(rsp)
+            t_back += Lbw + self.back.write_time(req)
+            t_back += Lbr + self.back.read_time(rsp)
         else:
+            # FIX # shards
             shards = (bsize + self.width - 1) / self.width
             shard_size = self.width
             (t_svr, bw_svr, l_svr) = self.server.read(self.width, depth, sseq)
             t_svr *= shards         # FIX - this ignores large read parallelism
             t_cpu += shards * self.back.write_cpu(req)
             t_cpu += shards * self.back.read_cpu(self.min_msg + shard_size)
+            t_back += Lbw + shards * self.back.write_time(req)
+            t_back += Lbr + shards * self.back.read_time(rsp)
 
         # CPU time to process actually process the data
         t_cpu = self.read_mult * self.cpu.process(bsize)
@@ -121,16 +128,21 @@ class Gateway:
         t_front += Lfw + self.front.write_time(rsp)           # send response
         t_cpu += self.front.write_cpu(rsp)
 
-        # compute the effective network and CPU bandwidth
-        bw_nf = self.num_fronts * self.front.max_write_bw
-        bw_nb = self.num_backs * self.back.max_read_bw
+        # compute the available network and CPU bandwidth
+        bw_nf = bsize * SECOND / t_front
+        bw_nf *= self.num_fronts
+        bw_nb = bsize * SECOND / t_back
+        bw_nb *= self.num_backs
+        avail_cores = self.num_cpus * self.cpu.cores * self.cpu.hyperthread
+        bw_cpu = avail_cores * bsize * SECOND / t_cpu
+
         bw_svr *= self.num_servers    # FIX this ignores long write stripe wrap
-        bw_cpu = bsize * SECOND / t_cpu
 
         # compute the request latency and throughputs
         latency = t_front + t_back + t_cpu + t_lock + t_svr
-        iops = depth * SECOND / latency
-        bandwidth = min(bsize * iops, bw_nf, bw_nb, bw_cpu)
+        bandwidth = min(bw_svr, bw_nf, bw_nb, bw_cpu)
+        iops = bandwidth / bsize
+        q_delay = 0
 
         load = {}
         load['server'] = bandwidth / bw_svr
@@ -138,41 +150,45 @@ class Gateway:
 
         # see what this means for front NIC load and queue
         nic_load = t_front * iops / float(self.num_fronts * SECOND)
+        if (nic_load >= 0.99):
+            self.warn("Gateway front saturated by %dus x %d IOPS for %s\n" %
+                      (t_front, iops, descr))
         delay = t_front * self.front.queue_length(nic_load, depth)
-        latency += delay
-        if (delay >= WARN_DELAY):
-            self.warn("Gateway front-NIC load adds %dus to %s\n" %
-                      (delay, descr))
+        q_delay += delay
+        delta = 100 * float(delay) / latency
+        if (delay >= WARN_DELAY and delta >= WARN_DELTA):
+            self.warn("Gateway front load (%4.2f) adds %dus (%d%%) to %s\n" %
+                      (nic_load, delay, delta, descr))
         load['front'] = nic_load
 
         # see what this means for back NIC load and queue
         nic_load = t_back * iops / float(self.num_backs * SECOND)
+        if (nic_load >= 0.99):
+            self.warn("Gateway back saturated by %dus x %d IOPS for %s\n" %
+                      (t_back, iops, descr))
         delay = t_back * self.back.queue_length(nic_load, depth)
-        latency += delay
-        if (delay >= WARN_DELAY):
-            self.warn("Gateway back-NIC load adds %dus to %s\n" %
-                      (delay, descr))
+        q_delay += delay
+        delta = 100 * float(delay) / latency
+        if (delay >= WARN_DELAY and delta >= WARN_DELTA):
+            self.warn("Gateway back load (%4.2f) adds %dus (%d%%) to %s\n" %
+                      (nic_load, delay, delta, descr))
         load['back'] = nic_load
 
         # see what this means for CPU load and queue
         avail_cores = self.num_cpus * self.cpu.cores * self.cpu.hyperthread
         core_load = t_cpu * iops / float(avail_cores * SECOND)
+        if (core_load >= 0.99):
+            self.warn("Gateway CPUs saturated by %dus x %d IOPS for %s\n" %
+                      (t_cpu, iops, descr))
         delay = t_cpu * self.cpu.queue_length(core_load, depth)
-        latency += delay
-        if (delay >= WARN_DELAY):
-            self.warn("Gateway CPU load adds %dus to %s\n" % (delay, descr))
+        q_delay += delay
+        delta = 100 * float(delay) / latency
+        if (delay >= WARN_DELAY and delta >= WARN_DELTA):
+            self.warn("Gateway CPU load (%4.2f) adds %dus (%d%%) to %s\n" %
+                      (core_load, delay, delta, descr))
         load['cpu'] = core_load
 
-        # check for unexpected throughput caps
-        for key in ('front', 'back', 'cpu', 'dlm'):
-            l = load[key]
-            if l > 0.99:
-                self.warn("Gateway throughput capped by %s (%s)\n"
-                          % (key, descr))
-            elif l >= WARN_LOAD:
-                self.warn("Gateway %s load at %4.2f (%s)\n" % (key, l, descr))
-
-        return (latency, bandwidth, load)
+        return (latency + q_delay, bandwidth, load)
 
     def write(self, bsize, depth=1, seq=False):
         """ expected write performance
@@ -251,63 +267,65 @@ class Gateway:
         t_front += Lfw + self.front.write_time(rsp)
         t_cpu += self.front.write_cpu(rsp)
 
-        # overall CPU loading, and queueing delays
+        # compute the available network and CPU bandwidth
+        bw_nf = bsize * SECOND / t_front
+        bw_nf *= self.num_fronts
+        bw_nb = bsize * SECOND / t_back
+        bw_nb *= self.num_backs
         avail_cores = self.num_cpus * self.cpu.cores * self.cpu.hyperthread
         bw_cpu = avail_cores * bsize * SECOND / t_cpu
 
-        # compute the effective network and CPU bandwidth
-        bw_nf = self.num_fronts * self.front.max_write_bw
-        bw_nb = self.num_backs * self.back.max_read_bw
         bw_svr *= self.num_servers    # FIX this ignores long write stripe wrap
 
         # compute the request latency and throughputs
         latency = t_front + t_back + t_cpu + t_lock + t_svr
-        iops = depth * SECOND / latency
-        bandwidth = min(bsize * iops, bw_nf, bw_nb, bw_cpu)
+        bandwidth = min(bw_svr, bw_nf, bw_nb, bw_cpu)
+        iops = bandwidth / bsize
+        q_delay = 0
 
         load = {}
         load['server'] = bandwidth / bw_svr
         load['dlm'] = 0                   # FIX - get from DLM model
 
-        # FIX I am seeing load factors > 1 for D=16 BS>4K
         # see what this means for front NIC load and queue
         nic_load = t_front * iops / float(self.num_fronts * SECOND)
+        if (nic_load >= 0.99):
+            self.warn("Gateway front saturated by %dus x %d IOPS for %s\n" %
+                      (t_front, iops, descr))
         delay = t_front * self.front.queue_length(nic_load, depth)
-        latency += delay
-        if (delay >= WARN_DELAY):
-            self.warn("Gateway front-NIC load adds %dus to %s\n" %
-                      (delay, descr))
+        q_delay += delay
+        delta = 100 * float(delay) / latency
+        if (delay >= WARN_DELAY and delta >= WARN_DELTA):
+            self.warn("Gateway front load (%4.2f) adds %dus (%d%%) to %s\n" %
+                      (nic_load, delay, delta, descr))
         load['front'] = nic_load
 
-        # FIX I am seeing load factors > 1 for D=16 BS>4K
         # see what this means for back NIC load and queue
         nic_load = t_back * iops / float(self.num_backs * SECOND)
+        if (nic_load >= 0.99):
+            self.warn("Gateway back saturated by %dus x %d IOPS for %s\n" %
+                      (t_back, iops, descr))
         delay = t_back * self.back.queue_length(nic_load, depth)
-        latency += delay
-        if (delay >= WARN_DELAY):
-            self.warn("Gateway back-NIC load adds %dus to %s\n" %
-                      (delay, descr))
+        q_delay += delay
+        delta = 100 * float(delay) / latency
+        if (delay >= WARN_DELAY and delta >= WARN_DELTA):
+            self.warn("Gateway back load (%4.2f) adds %dus (%d%%) to %s\n" %
+                      (nic_load, delay, delta, descr))
         load['back'] = nic_load
 
-        # FIX I am seeing load factors > 1 for D=16 BS>4K
         # see what this means for CPU load and queue
         core_load = t_cpu * iops / float(avail_cores * SECOND)
+        if (core_load >= 0.99):
+            self.warn("Gateway CPUs saturated by %dus x %d IOPS for %s\n" %
+                      (t_cpu, iops, descr))
         delay = t_cpu * self.cpu.queue_length(core_load, depth)
-        latency += delay
-        if (delay >= WARN_DELAY):
-            self.warn("Gateway CPU load adds %dus to %s\n" % (delay, descr))
+        q_delay += delay
+        delta = 100 * float(delay) / latency
+        if (delay >= WARN_DELAY and delta >= WARN_DELTA):
+            self.warn("Gateway CPU (%4.2f) adds %dus (%d%%) to %s\n" %
+                      (core_load, delay, delta, descr))
         load['cpu'] = core_load
 
-        # check for unexpected throughput caps
-        for key in ('front', 'back', 'cpu', 'dlm'):
-            l = load[key]
-            if l > 0.99:
-                self.warn("Gateway throughput capped by %s (%s)\n"
-                          % (key, descr))
-            elif l >= WARN_LOAD:
-                self.warn("Gateway %s load at %4.2f (%s)\n" % (key, l, descr))
-
-        print(load) # DEBUG
         return (latency, bandwidth, load)
 
     def create(self):
