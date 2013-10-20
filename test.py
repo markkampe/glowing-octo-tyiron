@@ -102,7 +102,7 @@ def test(data, server, gateway, tests):
                         bw=server['nic'])
     myShba = SimIFC.HBA("HBA",
                         processor=myScpu,
-                        bw=8 * 8 * GIG)
+                        bw=server['hba'])
     myServer = Server.Server(myData, num_disks=server['disks'],
                              cpu=myScpu, num_cpus=server['cpus'],
                              nic=mySnic, num_nics=server['nics'],
@@ -177,7 +177,7 @@ def test(data, server, gateway, tests):
 
     # check for warnings
     if myServer.warnings != "" or myGate.warnings != "":
-        print("WARNINGS: %s%s" % (myServer.warnings, myGate.warnings))
+        print("WARNINGS:\n%s%s" % (myServer.warnings, myGate.warnings))
 
 
 #
