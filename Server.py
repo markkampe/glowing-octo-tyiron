@@ -11,9 +11,10 @@ periodically flushes the accumulated writes to disk.
 
 from  units import *
 
+# constants to control queue length warnings
 WARN_LOAD = 0.8             # warn if load goes above this level
-WARN_DELAY = 100            # (us) warn if queue delay goes above
-
+WARN_DELAY = 100            # (us) only warn if queue delay goes above
+WARN_DELTA = 10             # (%) only warn if queue delay increases op time by
 
 class Server:
     """ Performance Modeling Single Server Simulation. """
@@ -85,7 +86,7 @@ class Server:
 
         # expected parallelism (requsts to multiple FS/disks)
         parallel = depth if depth <= self.num_disks else self.num_disks
-        perdisk = 1 if parallel <= depth else depth / parallel
+        perdisk = 1 if parallel >= depth else depth / parallel
 
         # FIX ... come up with some basis for this number
         t_l_cpu = 10        # us(cpu) to find/open desired object
@@ -112,8 +113,9 @@ class Server:
 
         # compute the request latency and throughputs
         latency = t_net + t_dsp + t_l_cpu + t_l_dsk + t_fr + t_cpu + t_rsp
-        iops = depth * SECOND / latency
-        bandwidth = min(bsize * iops, bw_n, bw_fs, bw_cpu, bw_hba)
+        bandwidth = min(bw_n, bw_fs, bw_cpu, bw_hba)
+        iops = bandwidth / bsize
+        q_delay = 0
 
         load = {}
         load['fs'] = bandwidth / bw_fs
@@ -122,17 +124,21 @@ class Server:
         # see what this means for NIC load and queue
         nic_load = t_net * iops / float(self.num_nics * SECOND)
         delay = t_net * self.nic.queue_length(nic_load, depth)
-        latency += delay
-        if (delay >= WARN_DELAY):
-            self.warn("Server NIC load adds %dus to %s\n" % (delay, descr))
+        q_delay += delay
+        delta = 100 * float(delay) / latency
+        if (delay >= WARN_DELAY and delta >= WARN_DELTA):
+            self.warn("Server NIC load (%4.2f) adds %dus (%d%%) to %s\n" %
+                      (nic_load, delay, delta, descr))
         load['net'] = nic_load
 
         # see what this means for CPU load and queue
         core_load = t_sync * iops / float(avail_cores * SECOND)
         delay = t_sync * self.cpu.queue_length(core_load, depth)
-        latency += delay
-        if (delay >= WARN_DELAY):
-            self.warn("Server CPU load adds %dus to %s\n" % (delay, descr))
+        q_delay += delay
+        delta = 100 * float(delay) / latency
+        if (delay >= WARN_DELAY and delta >= WARN_DELTA):
+            self.warn("Server CPU load (%4.2f) adds %dus (%d%%) to %s\n" %
+                      (core_load, delay, delta, descr))
         load['cpu'] = core_load
 
         # check for unexpected throughput caps
@@ -144,7 +150,7 @@ class Server:
             elif l >= WARN_LOAD:
                 self.warn("Server %s load at %4.2f for %s\n" % (key, l, descr))
 
-        return (latency, bandwidth, load)
+        return (latency + q_delay, bandwidth, load)
 
     def write(self, bsize, depth=1, seq=False):
         """ expected write performance
@@ -208,6 +214,7 @@ class Server:
         latency = t_net + t_sync
         bandwidth = min(bw_n, bw_fs, bw_cpu, bw_hba)
         iops = bandwidth / bsize
+        q_delay = 0
 
         load = {}
         load['fs'] = bandwidth / bw_fs
@@ -216,18 +223,22 @@ class Server:
         # see what this means for NIC load and queue
         nic_load = t_net * iops / float(self.num_nics * SECOND)
         delay = t_net * self.nic.queue_length(nic_load, depth)
-        latency += delay
-        if (delay >= WARN_DELAY):
-            self.warn("Server NIC load adds %dus to %s\n" % (delay, descr))
+        q_delay += delay
+        delta = 100 * float(delay) / latency
+        if (delay >= WARN_DELAY and delta >= WARN_DELTA):
+            self.warn("Server NIC load (%4.2f) adds %dus (%d%%) to %s\n" %
+                      (nic_load, delay, delta, descr))
         load['net'] = nic_load
 
         # see what this means for CPU load and queue
         cpu_per_op = t_sync + t_async
         core_load = cpu_per_op * iops / float(avail_cores * SECOND)
         delay = cpu_per_op * self.cpu.queue_length(core_load, depth)
-        latency += delay
-        if (delay >= WARN_DELAY):
-            self.warn("Server CPU load adds %dus to %s\n" % (delay, descr))
+        q_delay += delay
+        delta = 100 * float(delay) / latency
+        if (delay >= WARN_DELAY and delta >= WARN_DELTA):
+            self.warn("Server CPU load (%4.2f) adds %dus (%d%%) to %s\n" %
+                      (core_load, delay, delta, descr))
         load['cpu'] = core_load
 
         # check for unexpected throughput caps
@@ -239,7 +250,7 @@ class Server:
             elif l >= WARN_LOAD:
                 self.warn("Server %s load at %4.2f for %s\n" % (key, l, descr))
 
-        return (latency, bandwidth, load)
+        return (latency + q_delay, bandwidth, load)
 
     def create(self):
         """ creation one new data containing object on the data file system """
