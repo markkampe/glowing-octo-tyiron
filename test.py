@@ -57,6 +57,7 @@ def makedisk(dict):
         heads = dict['heads'] if 'heads' in dict else 10
         return SimDisk.Disk(rpm, sz, spd, heads=heads)
 
+
 def makefs(disk, dict):
     """ instantiate the filesystem described by a configuration dict
         disk -- on which file system is to be created
@@ -78,6 +79,75 @@ def makefs(disk, dict):
     else:
         return SimFS.xfs(disk, age)
 
+
+def makeServer(fs, dict):
+    """ instantiate the server node described by a configuration dict
+        fs -- file system on which data is stored
+        dict -- of server parameters
+    """
+
+    # FIX add default number of disks
+    numSdisk = dict['disks']
+
+    # FIX add default CPU and number
+    myScpu = SimCPU.CPU(dict['cpu'],
+                        speed=dict['speed'],
+                        cores=dict['cores'])
+    numScpu = dict['cpus']
+
+    # FIX add default NIC and number
+    mySnic = SimIFC.NIC("eth",
+                        processor=myScpu,
+                        bw=dict['nic'])
+    numSnic = dict['nics']
+
+    # FIX add default HBA and number
+    myShba = SimIFC.HBA("HBA",
+                        processor=myScpu,
+                        bw=dict['hba'])
+    numShba = dict['hbas']
+
+    return Server.Server(fs, num_disks=numSdisk,
+                         cpu=myScpu, num_cpus=numScpu,
+                         nic=mySnic, num_nics=numSnic,
+                         hba=myShba, num_hbas=numShba)
+
+
+def makeGateway(server, dict):
+
+    # FIX add default number of servers
+    numSvr = dict['servers']
+
+    # FIX add default CPU and number
+    myGcpu = SimCPU.CPU(dict['cpu'],
+                        speed=dict['speed'],
+                        cores=dict['cores'])
+    numGcpu = dict['cpus']
+
+    # FIX add default front-side NIC and number
+    myGfront = SimIFC.NIC("eth",
+                          processor=myGcpu,
+                          bw=dict['front'])
+    numGfront = dict['fronts']
+
+    # FIX add default front-side NIC and number
+    myGback = SimIFC.NIC("eth",
+                         processor=myGcpu,
+                         bw=dict['back'])
+    numGback = dict['backs']
+
+    # FIX add default stripe parameters
+    n = dict['n']
+    m = dict['m']
+    stripe = dict['stripe']
+
+    return Gateway.Gateway(server, num_servers=numSvr,
+                           cpu=myGcpu, num_cpus=numGcpu,
+                           front_nic=myGfront, num_front=numGfront,
+                           back_nic=myGback, num_back=numGback,
+                           n=n, m=m, stripe=stripe)
+
+
 def test(data, server, gateway, tests):
     """ run a specific set of tests on a specific cluster simulation
         data -- dictionary describing the data devices
@@ -93,38 +163,11 @@ def test(data, server, gateway, tests):
     data_dev = myDDisk.desc
     data_desc = "%s (on %s)" % (data_fstype, data_dev)
 
-    # instantiate a server node
-    myScpu = SimCPU.CPU(server['cpu'],
-                        speed=server['speed'],
-                        cores=server['cores'])
-    mySnic = SimIFC.NIC("eth",
-                        processor=myScpu,
-                        bw=server['nic'])
-    myShba = SimIFC.HBA("HBA",
-                        processor=myScpu,
-                        bw=server['hba'])
-    myServer = Server.Server(myData, num_disks=server['disks'],
-                             cpu=myScpu, num_cpus=server['cpus'],
-                             nic=mySnic, num_nics=server['nics'],
-                             hba=myShba, num_hbas=server['hbas'])
+    # instantiate a data server
+    myServer = makeServer(myData, server)
 
-
-    # instantiate the distributed system
-    myGcpu = SimCPU.CPU(gateway['cpu'],
-                        speed=gateway['speed'],
-                        cores=gateway['cores'])
-    myGfront = SimIFC.NIC("eth",
-                        processor=myGcpu,
-                        bw=gateway['front'])
-    myGback = SimIFC.NIC("eth",
-                        processor=myGcpu,
-                        bw=gateway['back'])
-    myGate = Gateway.Gateway(myServer, num_servers=gateway['servers'],
-                             cpu=myScpu, num_cpus=gateway['cpus'],
-                             front_nic=myGfront, num_front=gateway['fronts'],
-                             back_nic=myGback, num_back=gateway['backs'],
-                             n=gateway['n'], m=gateway['m'],
-                             stripe=gateway['stripe'])
+    # instantiate a gateway server
+    myGate = makeGateway(myServer, gateway)
 
     #
     # run the specified tests for the specified ranges
@@ -207,12 +250,14 @@ def test(data, server, gateway, tests):
 #
 if __name__ == '__main__':
 
-    data = {        # data storage devices
+    data = {
+        # data storage devices
         'device': "disk",
         'fs': "zfs"
     }
 
-    gateway = {     # gateway
+    gateway = {
+        # gateway
         'cpu': "xeon",
         'speed': 2.2 * GIG,
         'cores': 2,
@@ -224,10 +269,11 @@ if __name__ == '__main__':
         'n': 5,
         'm': 2,
         'stripe': 128 * KB,
-        'servers': 4,
+        'servers': 4
     }
 
-    server = {      # file server
+    server = {
+        # file server
         'cpu': "xeon",
         'speed': 2.5 * GIG,
         'cores': 2,
@@ -236,10 +282,12 @@ if __name__ == '__main__':
         'nics': 1,
         'hba': 8 * GIG,
         'hbas': 1,
-        'disks': 4,
+        'disks': 4
     }
 
-    tests = {       # what tests to run with what parameters
+    tests = {
+        # what tests to run with what parameters
+
         # raw disk parameters and simulations
         'DiskParms': True,
         'FioRdepths': [1, 32],
@@ -253,16 +301,16 @@ if __name__ == '__main__':
         'FioFbs': (4096, 128 * 1024, 4096 * 1024),
 
         # Server performance tests
-        'SioSdepths': [1,16],
+        'SioSdepths': [1, 16],
         'SioSbs': (4096, 128 * 1024, 4096 * 1024),
 
         # Gateway performance tests
-        'SioCdepths': [1,16],
-        'SioCbs': (4096, 128 * 1024, 4096 * 1024),
+        'SioCdepths': [1, 16],
+        'SioCbs': (4096, 128 * 1024, 4096 * 1024)
     }
 
-    notests = {     # just generate simulation data
-
+    notests = {
+        # just generate simulation data
         'FioFsize': 16 * GIG,
         'perfdata': True
     }
@@ -270,7 +318,8 @@ if __name__ == '__main__':
     from optparse import OptionParser
     parser = OptionParser("usage: %prog [options]")
     parser.add_option("-d", "--data", dest="sim", action="store_true",
-                default=False, help="produce simulated FS performance data")
+                      default=False,
+                      help="produce simulated FS performance data")
     (opts, files) = parser.parse_args()
     if opts.sim:
         test(data, server, gateway, notests)
