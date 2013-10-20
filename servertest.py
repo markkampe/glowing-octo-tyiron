@@ -21,7 +21,8 @@ from Report import Report
 from units import *
 
 
-def servertest(fs, depth=1, crtdlt=False):
+def servertest(fs, depth=1, crtdlt=False,
+               bsizes=(4096, 128 * 1024, 4096 * 1024)):
     """ compute & display standard test results """
 
     if crtdlt:
@@ -35,7 +36,7 @@ def servertest(fs, depth=1, crtdlt=False):
 
     r = Report(("rnd read", "rnd write"))
     r.printHeading()
-    for bs in (4096, 128 * 1024, 4096 * 1024):
+    for bs in bsizes:
         (trr, brr, rload) = fs.read(bs, depth=depth)
         (trw, brw, wload) = fs.write(bs, depth=depth)
         r.printBW(bs, (brr, brw))

@@ -140,7 +140,11 @@ def test(data, server, gateway, tests):
         sz = tests['FioRsize']
         for d in tests['FioRdepths']:
             print("Raw data device (%s), depth=%d" % (data_dev, d))
-            disktest.tptest(myData.disk, filesize=sz, depth=d)
+            if 'FioRbs' in tests:
+                bs = tests['FioRbs']
+                disktest.tptest(myData.disk, filesize=sz, depth=d, bsizes=bs)
+            else:
+                disktest.tptest(myData.disk, filesize=sz, depth=d)
             print("")
 
     # fio to the data file system
@@ -148,7 +152,13 @@ def test(data, server, gateway, tests):
     if 'FioFdepths' in tests:
         for d in tests['FioFdepths']:
             print("FIO (direct) to %s, depth=%d" % (data_desc, d))
-            fstest.fstest(myServer.data_fs, filesize=sz, depth=d, direct=True)
+            if 'FioFbs' in tests:
+                bs = tests['FioFbs']
+                fstest.fstest(myServer.data_fs, filesize=sz, depth=d,
+                              direct=True, bsizes=bs)
+            else:
+                fstest.fstest(myServer.data_fs, filesize=sz, depth=d,
+                              direct=True)
             print("")
 
     # server throughput tests
@@ -161,7 +171,11 @@ def test(data, server, gateway, tests):
                   myServer.num_nics, myServer.nic.desc,
                   myServer.num_hbas, myServer.hba.desc,
                   d))
-            servertest.servertest(myServer, depth=d)
+            if 'SioSbs' in tests:
+                bs = tests['SioSbs']
+                servertest.servertest(myServer, depth=d, bsizes=bs)
+            else:
+                servertest.servertest(myServer, depth=d)
             print("")
 
     if 'SioCdepths' in tests:
@@ -172,12 +186,20 @@ def test(data, server, gateway, tests):
                   myGate.num_fronts, myGate.front.desc,
                   myGate.num_backs, myGate.back.desc,
                   d))
-            gatewaytest.gatewaytest(myGate, depth=d)
+            if 'SioCbs' in tests:
+                bs = tests['SioCbs']
+                gatewaytest.gatewaytest(myGate, depth=d, bsizes=bs)
+            else:
+                gatewaytest.gatewaytest(myGate, depth=d)
             print("")
 
     # check for warnings
     if myServer.warnings != "" or myGate.warnings != "":
-        print("WARNINGS:\n%s%s" % (myServer.warnings, myGate.warnings))
+        print("WARNINGS:")
+    if myServer.warnings != "":
+        print(myServer.warnings)
+    if myGate.warnings != "":
+        print(myGate.warnings)
 
 
 #
@@ -222,17 +244,21 @@ if __name__ == '__main__':
         'DiskParms': True,
         'FioRdepths': [1, 32],
         'FioRsize': 16 * GIG,
+        'FioRbs': (4096, 128 * 1024, 4096 * 1024),
 
         # FS performance tests
         'FioJournal': True,
         'FioFdepths': [1, 32],
         'FioFsize': 16 * GIG,
+        'FioFbs': (4096, 128 * 1024, 4096 * 1024),
 
         # Server performance tests
         'SioSdepths': [1,16],
+        'SioSbs': (4096, 128 * 1024, 4096 * 1024),
 
         # Gateway performance tests
         'SioCdepths': [1,16],
+        'SioCbs': (4096, 128 * 1024, 4096 * 1024),
     }
 
     notests = {     # just generate simulation data

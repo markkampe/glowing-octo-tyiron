@@ -16,6 +16,7 @@ WARN_LOAD = 0.8             # warn if load goes above this level
 WARN_DELAY = 100            # (us) only warn if queue delay goes above
 WARN_DELTA = 10             # (%) only warn if queue delay increases op time by
 
+
 class Server:
     """ Performance Modeling Single Server Simulation. """
 

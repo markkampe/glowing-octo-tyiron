@@ -21,7 +21,8 @@ from Report import Report
 from units import *
 
 
-def gatewaytest(fs, depth=1, crtdlt=False):
+def gatewaytest(fs, depth=1, crtdlt=False,
+                bsizes=(4096, 128 * 1024, 4096 * 1024)):
     """ compute & display standard  test results """
 
     if crtdlt:
@@ -35,7 +36,7 @@ def gatewaytest(fs, depth=1, crtdlt=False):
 
     r = Report(("seq read", "seq write", "rnd read", "rnd write"))
     r.printHeading()
-    for bs in (4096, 128 * 1024, 4096 * 1024):
+    for bs in bsizes:
         (tsr, bsr, usage) = fs.read(bs, depth=depth, seq=True)
         (tsw, bsw, usage) = fs.write(bs, depth=depth, seq=True)
         (trr, brr, usage) = fs.read(bs, depth=depth, seq=False)
