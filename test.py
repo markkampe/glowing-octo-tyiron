@@ -17,6 +17,7 @@ import SimIFC
 import SimCPU
 import Server
 import Gateway
+import Dlm
 import zfs
 
 # test harnesses
@@ -113,7 +114,24 @@ def makeServer(fs, dict):
                          hba=myShba, num_hbas=numShba)
 
 
-def makeGateway(server, dict):
+def makeDLM(dict):
+        # FIX add default CPU and number
+    mycpu = SimCPU.CPU(dict['cpu'],
+                       speed=dict['speed'],
+                       cores=dict['cores'])
+    numcpu = dict['cpus']
+
+    # FIX add default NIC and number
+    mynic = SimIFC.NIC("eth",
+                       processor=mycpu,
+                       bw=dict['nic'])
+    numnic = dict['nics']
+
+    return Dlm.DLM(cpu=mycpu, num_cpus=numcpu,
+                   nic=mynic, num_nics=numnic)
+
+
+def makeGateway(server, dlm, dict):
 
     # FIX add default number of servers
     numSvr = dict['servers']
@@ -139,13 +157,14 @@ def makeGateway(server, dict):
     # FIX add default stripe parameters
     n = dict['n']
     m = dict['m']
-    stripe = dict['stripe']
+    strip = dict['strip']
 
-    return Gateway.Gateway(server, num_servers=numSvr,
+    return Gateway.Gateway(server, dlm,
+                           num_servers=numSvr,
                            cpu=myGcpu, num_cpus=numGcpu,
                            front_nic=myGfront, num_front=numGfront,
                            back_nic=myGback, num_back=numGback,
-                           n=n, m=m, stripe=stripe)
+                           n=n, m=m, strip=strip)
 
 
 def test(data, server, gateway, tests):
@@ -166,8 +185,11 @@ def test(data, server, gateway, tests):
     # instantiate a data server
     myServer = makeServer(myData, server)
 
+    # instantiate a DLM
+    myDLM = makeDLM(dlm)
+
     # instantiate a gateway server
-    myGate = makeGateway(myServer, gateway)
+    myGate = makeGateway(myServer, myDLM, gateway)
 
     #
     # run the specified tests for the specified ranges
@@ -198,10 +220,10 @@ def test(data, server, gateway, tests):
             if 'FioFbs' in tests:
                 bs = tests['FioFbs']
                 fstest.fstest(myServer.data_fs, filesize=sz, depth=d,
-                              direct=True, bsizes=bs)
+                              direct=True, bsizes=bs, crtdlt=False)
             else:
                 fstest.fstest(myServer.data_fs, filesize=sz, depth=d,
-                              direct=True)
+                              direct=True, crtdlt=False)
             print("")
 
     # server throughput tests
@@ -268,7 +290,7 @@ if __name__ == '__main__':
         'backs': 1,
         'n': 5,
         'm': 2,
-        'stripe': 128 * KB,
+        'strip': 128 * KB,
         'servers': 4
     }
 
@@ -283,6 +305,16 @@ if __name__ == '__main__':
         'hba': 8 * GIG,
         'hbas': 1,
         'disks': 4
+    }
+
+    dlm = {
+        # Distributed Lock Manager
+        'cpu': "xeon",
+        'speed': 2.5 * GIG,
+        'cores': 2,
+        'cpus': 1,
+        'nic': 10 * GIG,
+        'nics': 1
     }
 
     tests = {
