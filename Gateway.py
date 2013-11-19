@@ -1,3 +1,4 @@
+#!/usr/bin/python
 #
 # nonesuch
 #
@@ -10,7 +11,7 @@ servers.
 # HELP: I implemented pre-fetch in the Server, should it be in Gateway:read?
 
 from Dlm import DLM
-from units import KB, SECOND
+from units import *
 
 # constants to control queue length warnings
 WARN_LOAD = 0.8             # warn if load goes above this level
@@ -427,3 +428,133 @@ class Gateway:
         """ delete a data containing object from the data file system """
 
         return(1)   # LATER - implement delete
+
+
+def makeGateway(ds, dlm, dict):
+    """ instantiate the server node described by a configuration dict
+        ds -- simulation for the Data Servers
+        dlm -- simulation for the Lock Manager
+        dict -- of server parameters
+    """
+
+    dflts = {
+        'servers': 1,
+        'cpus': 1,
+        'cpu': 'generic',
+        'speed': 2.7 * GIG,
+        'cores': 1,
+        'fronts': 1,
+        'front':  1 * GIG,
+        'backs': 1,
+        'back':  10 * GIG,
+        'n': 6,
+        'm': 2,
+        'strip': 128 * KB,
+    }
+
+    # collect the parameters
+    servers = dict['servers'] if 'servers' in dict else dflts['servers']
+    cpus = dict['cpus'] if 'cpus' in dict else dflts['cpus']
+    fronts = dict['fronts'] if 'fronts' in dict else dflts['fronts']
+    front_bw = dict['front'] if 'front' in dict else dflts['front']
+    backs = dict['backs'] if 'backs' in dict else dflts['backs']
+    back_bw = dict['back'] if 'back' in dict else dflts['back']
+    n = dict['n'] if 'n' in dict else dflts['n']
+    m = dict['m'] if 'm' in dict else dflts['m']
+    strip = dict['strip'] if 'strip' in dict else dflts['strip']
+
+    # instantiate my own devices
+    import SimCPU
+    myCpu = SimCPU.makeCPU(dict)
+
+    import SimIFC
+    myFront = SimIFC.NIC("eth", processor=myCpu, bw=front_bw)
+    myBack = SimIFC.NIC("eth", processor=myCpu, bw=back_bw)
+
+    gateway = Gateway(ds, dlm,
+                      num_servers=servers,
+                      cpu=myCpu, num_cpus=cpus,
+                      front_nic=myFront, num_front=fronts,
+                      back_nic=myBack, num_back=backs,
+                      n=n, m=m, strip=strip)
+    return gateway
+
+
+from Report import Report
+
+
+def gatewaytest(gw, dict, descr=""):
+    """
+    exercise a gateway with tests described in a dict
+        s -- server to be tested
+        dict --
+            SioCdepth ... list of request depths
+            SioCbs ... list of block sizes
+            SioCmisc ... do create/delete ops too?
+    """
+
+    dflt = {        # default throughput test parameters
+        'SioCdepth': [1, 32],
+        'SioCbs': [4096, 128 * 1024, 4096 * 1024],
+        'SioCmisc': False,
+    }
+
+    depths = dict['SioCdepth'] if 'SioCdepth' in dict else dflt['SioCdepth']
+    bsizes = dict['SioCbs'] if 'SioCbs' in dict else dflt['SioCbs']
+    misc = dict['SioCmisc'] if 'SioCmisc' in dict else dflt['SioCmisc']
+    """ compute & display standard test results """
+
+    r = Report(("seq read", "seq write", "rnd read", "rnd write"))
+    for d in depths:
+        if misc:
+            tc = gw.create(depth=d)
+            td = gw.delete(depth=d)
+
+            r = Report(("create", "delete"))
+            r.printHeading()
+            r.printIOPS(1, (SECOND / tc, SECOND / td))
+            r.printLatency(1, (tc, td))
+            print("")
+
+        print("Gateway throughput: %s, depth=%d" % (descr, d))
+        r = Report(("seq read", "seq write", "rnd read", "rnd write"))
+        r.printHeading()
+        for bs in bsizes:
+            (tsr, bsr, rload) = gw.read(bs, depth=d, seq=True)
+            (tsw, bsw, wload) = gw.write(bs, depth=d, seq=True)
+            (trr, brr, rload) = gw.read(bs, depth=d, seq=False)
+            (trw, brw, wload) = gw.write(bs, depth=d, seq=False)
+            r.printBW(bs, (bsr, bsw, brr, brw))
+
+            # compute the corresponding IOPS
+            isr = bsr / bs
+            isw = bsw / bs
+            irr = brr / bs
+            irw = brw / bs
+            r.printIOPS(0, (isr, isw, irr, irw))
+
+            r.printLatency(0, (tsr, tsw, trr, trw))
+        print("")
+
+
+#
+# run a standard test series
+#
+if __name__ == '__main__':
+
+        from SimDisk import makedisk
+        disk = makedisk({'device': 'disk'})
+        from SimFS import makefs
+        fs = makefs(disk, {})
+        from Server import makeServer
+        s = makeServer(fs, {})
+        from Dlm import makeDLM
+        dlm = makeDLM({})
+
+        gw = makeGateway(s, dlm, {})
+        msg = "%dx%s, front=%dx%s, back=%dx%s" % (
+            gw.num_cpus, gw.cpu.desc,
+            gw.num_fronts, gw.front.desc,
+            gw.num_backs, gw.front.desc)
+
+        gatewaytest(s, {}, descr=msg)

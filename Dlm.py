@@ -1,3 +1,4 @@
+#!/usr/bin/python
 #
 # nonesuch
 #
@@ -68,3 +69,48 @@ class DLM:
         bw = SECOND / latency
         load['cpu'] = float(cpu_msg + cpu_lock) / SECOND
         return (latency, bw, load)
+
+
+def makeDLM(dict):
+    """ instantiate the DLM described by a configuration dict
+        dict -- of DLM parameters
+    """
+
+    dflts = {
+        'cpus': 1,
+        'cpu': 'generic',
+        'speed': 2.7 * GIG,
+        'cores': 1,
+        'nics': 1,
+        'nic':  10 * GIG,
+    }
+
+    # collect the parameters
+    cpus = dict['cpus'] if 'cpus' in dict else dflts['cpus']
+    cpu = dict['cpu'] if 'cpu' in dict else dflts['cpu']
+    speed = dict['speed'] if 'speed' in dict else dflts['speed']
+    cores = dict['cores'] if 'cores' in dict else dflts['cores']
+    nics = dict['nics'] if 'nics' in dict else dflts['nics']
+    nic_bw = dict['nic'] if 'nic' in dict else dflts['nic']
+
+    # instantiate the parts
+    import SimCPU
+    myCpu = SimCPU.makeCPU(dict)
+    import SimIFC
+    myNic = SimIFC.NIC("eth", processor=myCpu, bw=nic_bw)
+
+    # instantiate the DLM
+    dlm = DLM(myNic, myCpu, nics, cpus)
+    return dlm
+
+
+#
+# instantiate and test the DLM simulation
+#
+if __name__ == '__main__':
+
+    dlm = makeDLM({})
+
+    (tl, bw, ll) = dlm.lock()
+    print("\tlock = %dus" % (tl))
+    print("")

@@ -509,7 +509,7 @@ def servertest(s, dict, descr=""):
 
     r = Report(("seq read", "seq write", "rnd read", "rnd write"))
     for d in depths:
-        print("server throughput: %s, depth=%d" % (descr, d))
+        print("Server throughput: %s, depth=%d" % (descr, d))
         r.printHeading()
         for bs in bsizes:
             (tsr, bsr, rload) = s.read(bs, depth=d, seq=True)
