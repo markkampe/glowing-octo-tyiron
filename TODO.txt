@@ -1,0 +1,61 @@
+JUST DO IT
+
+	test
+		random/seq controlled by dictionary (<-ceph)
+		make sure that report output for creates/deletes is obviously ops/sec (->ceph)
+
+		refactorings to combine build and test functions (<-ceph)
+
+	add Server getattr/setattr/commit tests
+	
+	SimCPU:	memory pressure factor ??? how to approach
+	
+	Gateway
+		add read-ahead option
+		{create,delete}: implement in terms of MDS
+		add tests for create/delete/open
+		probability of needing a lock
+		add getattr/setattr and tests
+	
+	Server
+		add read/modify/write
+
+	MDS ... list to come
+
+	put a client on top of the gateway simulation
+	how to scale Gateway to whole cluster throughput
+
+REQUIRES THOUGHT
+
+
+REQUIRES DISCUSSION/REVIEW
+
+	make sure NIC model is general enough to simulate RDMA
+
+	a more intelligent modeling of cache sizes and hit rates
+
+DATA GATHERING
+	We need to understand the observed (poor) network performance
+		what is queueing delay
+		what is startup latency
+		what is recipient dispatch latency
+		what is turn-around
+		... and on the way back
+
+	We need NOFS fio data with the block-sizes, depths, and
+	characteristics of the reads and writes that will be
+	done from the data storage nodes.  We will use this to
+	calibrate the NOFS SimFS simulation.
+
+	We need results from similar tests a data storage node load
+	generation test, so that we can compare the simulated results
+	with the actual results and refine the simulation.
+
+SOMEDAY/LATER
+
+	transient response simulation for NLUN-FS and node status  updates
+
+	utilization aware load mixer
+
+NOTES TO PROCESS
+
