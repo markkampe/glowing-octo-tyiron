@@ -1,3 +1,4 @@
+#!/usr/bin/python
 #
 # nonesuch
 #
@@ -23,6 +24,8 @@ periodically flushes the accumulated writes to disk.
 #
 
 from units import *
+import SimCPU
+import SimIFC
 
 # constants to control queue length warnings
 WARN_LOAD = 0.8             # warn if load goes above this level
@@ -429,3 +432,117 @@ class Server:
         # load['fs'] = l_fsg['fs'] + l_fss['fs']
 
         return(latency, iops, load)
+
+
+def makeServer(fs, dict):
+    """ instantiate the server node described by a configuration dict
+        fs -- file system on which data is stored
+        dict -- of server parameters
+    """
+
+    dflts = {
+        'disks': 1,
+        'cpus': 1,
+        'cpu': 'generic',
+        'speed': 2.7 * GIG,
+        'cores': 1,
+        'nics': 1,
+        'nic':  10 * GIG,
+        'hbas': 1,
+        'hba': 8 * GIG,
+    }
+
+    # collect the parameters
+    disks = dict['disks'] if 'disks' in dict else dflts['disks']
+    cpus = dict['cpus'] if 'cpus' in dict else dflts['cpus']
+    cpu = dict['cpu'] if 'cpu' in dict else dflts['cpu']
+    speed = dict['speed'] if 'speed' in dict else dflts['speed']
+    cores = dict['cores'] if 'cores' in dict else dflts['cores']
+    nics = dict['nics'] if 'nics' in dict else dflts['nics']
+    nic_bw = dict['nic'] if 'nic' in dict else dflts['nic']
+    hbas = dict['hbas'] if 'hbas' in dict else dflts['hbas']
+    hba_bw = dict['hba'] if 'hba' in dict else dflts['hba']
+
+    myScpu = SimCPU.makeCPU(dict)
+    mySnic = SimIFC.NIC("eth", processor=myScpu, bw=nic_bw)
+    myShba = SimIFC.HBA("HBA", processor=myScpu, bw=hba_bw)
+
+    server = Server(fs, num_disks=disks,
+                    cpu=myScpu, num_cpus=cpus,
+                    nic=mySnic, num_nics=nics,
+                    hba=myShba, num_hbas=hbas)
+    return server
+
+
+from Report import Report
+
+
+def servertest(s, dict, descr=""):
+    """
+    exercise a server with tests described in a dict
+        s -- server to be tested
+        dict --
+            SioSdepth ... list of request depths
+            SioSbs ... list of block sizes
+            SioSmisc ... do create/delete ops too?
+    """
+
+    dflt = {        # default throughput test parameters
+        'SioSdepth': [1, 32],
+        'SioSbs': [4096, 128 * 1024, 4096 * 1024],
+        'SioSmisc': False,
+    }
+
+    depths = dict['SioSdepth'] if 'SioSdepth' in dict else dflt['SioSdepth']
+    bsizes = dict['SioSbs'] if 'SioSbs' in dict else dflt['SioSbs']
+    misc = dict['SioSmisc'] if 'SioSmisc' in dict else dflt['SioSmisc']
+    """ compute & display standard test results """
+
+    if misc:
+        tc = s.create()
+        td = s.delete()
+
+        r = Report(("create", "delete"))
+        r.printHeading()
+        r.printIOPS(1, (SECOND / tc, SECOND / td))
+        r.printLatency(1, (tc, td))
+
+    r = Report(("seq read", "seq write", "rnd read", "rnd write"))
+    for d in depths:
+        print("server throughput: %s, depth=%d" % (descr, d))
+        r.printHeading()
+        for bs in bsizes:
+            (tsr, bsr, rload) = s.read(bs, depth=d, seq=True)
+            (tsw, bsw, wload) = s.write(bs, depth=d, seq=True)
+            (trr, brr, rload) = s.read(bs, depth=d, seq=False)
+            (trw, brw, wload) = s.write(bs, depth=d, seq=False)
+            r.printBW(bs, (bsr, bsw, brr, brw))
+
+            # compute the corresponding IOPS
+            isr = bsr / bs
+            isw = bsw / bs
+            irr = brr / bs
+            irw = brw / bs
+            r.printIOPS(0, (isr, isw, irr, irw))
+
+            r.printLatency(0, (tsr, tsw, trr, trw))
+        print("")
+
+#
+# run a standard test series
+#
+if __name__ == '__main__':
+
+        from SimDisk import makedisk
+        disk = makedisk({'device': 'disk'})
+        from SimFS import makefs
+        fs = makefs(disk, {})
+
+        s = makeServer(fs, {})
+        msg = "%dx%s, %dx%s, %dx%s, %dx%s" % (
+            s.num_cpus, s.cpu.desc,
+            s.num_disks, disk.desc,
+            s.num_nics, s.nic.desc,
+            s.num_hbas, s.hba.desc)
+
+        servertest(s, {}, descr=msg)
