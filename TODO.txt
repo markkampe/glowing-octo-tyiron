@@ -1,4 +1,23 @@
+POINT OF ORDER
+	Review everything to segregate these into ceph put-backs
+	and WuShan simulations (that will probably never happen)
+	Do right by Ceph and then put Glowing Octo to bed)
+
 JUST DO IT
+
+	most test functions are now obsolete
+		confirm each
+		mutatis mutandum those that don't yet
+		delete obsolete modules from glow
+		delete obsolete modules from wip-perf-model
+
+	SimFS
+		add CPU parameter so we can scale those costs too
+
+	Gui
+		import sys; query sys.version_info to include tkintr/TKintr
+
+	SimDisk returns <l,b,L>
 
 	test
 		random/seq controlled by dictionary (<-ceph)
@@ -6,11 +25,10 @@ JUST DO IT
 
 		refactorings to combine build and test functions (<-ceph)
 
-	add Server getattr/setattr/commit tests
-	
 	SimCPU:	memory pressure factor ??? how to approach
 	
 	Gateway
+		seq/random controlled by dict options
 		add read-ahead option
 		{create,delete}: implement in terms of MDS
 		add tests for create/delete/open
@@ -18,7 +36,10 @@ JUST DO IT
 		add getattr/setattr and tests
 	
 	Server
+		add getattr/setattr/commit tests
 		add read/modify/write
+
+	ceph:	make mutatis mutandum list for ceph modules
 
 	MDS ... list to come
 
